@@ -1,0 +1,506 @@
+@startuml DiagramaComponentes_Sistema_SAVIMF_Completo
+
+title Diagrama de Componentes - Sistema SAVIMF (Completo)
+
+' =====================================
+' CAPA DE DISPOSITIVOS IoT
+' =====================================
+
+package "IoT Layer - Dispositivos de Campo" {
+    
+    component "ESP32 Device" as ESP32
+    component "Button Handler" as ButtonHandler
+    component "GPS Module" as GPSModule
+    component "LoRaWAN Stack" as LoRaWANStack
+    component "Battery Manager" as BatteryManager
+    component "LED Controller" as LEDController
+    
+    interface "GPIO Pins" as GPIO
+    interface "UART GPS" as UART
+    interface "SPI LoRa" as SPI
+    interface "I2C Battery" as I2C
+    
+    ESP32 --> ButtonHandler
+    ESP32 --> GPSModule
+    ESP32 --> LoRaWANStack
+    ESP32 --> BatteryManager
+    ESP32 --> LEDController
+    
+    ButtonHandler --> GPIO : Pin 38
+    GPSModule --> UART : TinyGPS++
+    LoRaWANStack --> SPI : LMIC Library
+    BatteryManager --> I2C : AXP20X
+    LEDController --> GPIO : Pin 2
+    
+    note right of ESP32
+        **Hardware:**
+        - TTGO T-Beam v1.1
+        - SX1276 LoRa (868/915 MHz)
+        - NEO-6M GPS
+        - AXP192 PMU
+        
+        **Firmware:**
+        - Arduino/PlatformIO
+        - LMIC LoRaWAN 1.0.3
+        - 3000ms press detection
+        - 10s GPS timeout
+        
+        **Transmisión:**
+        - Frecuencia: US 902-928 MHz
+        - Payload: 51 bytes (DevEUI + GPS)
+    end note
+}
+
+' =====================================
+' CAPA DE RED LoRaWAN
+' =====================================
+
+cloud "LoRaWAN Network" {
+    
+    component "Gateway LoRa" as Gateway
+    component "Packet Forwarder" as PacketForwarder
+    component "Backhaul Internet" as Backhaul
+    
+    Gateway --> PacketForwarder
+    Gateway --> Backhaul
+    
+    package "The Things Stack" as TTS {
+        component "Network Server" as NS
+        component "Join Server" as JoinServer
+        component "MAC Layer" as MACLayer
+        component "Device Registry" as DeviceRegistry
+        
+        component "Application Server" as AS
+        component "Payload Decoder" as PayloadDecoder
+        component "Webhook Manager" as WebhookManager
+        component "Device Management API" as DeviceAPI
+        
+        interface "HTTP Webhook" as WebhookHTTP
+        interface "gRPC API" as gRPCAPI
+        
+        NS --> JoinServer
+        NS --> MACLayer
+        NS --> DeviceRegistry
+        
+        AS --> PayloadDecoder
+        AS --> WebhookManager
+        AS --> WebhookHTTP
+        AS --> gRPCAPI
+    }
+    
+    note right of TTS
+        **The Things Stack v3:**
+        - Region: NAM1 (North America)
+        - Application ID: savimf-app
+        - Webhook URL: http://18.225.31.96:5000
+        
+        **Uplink Processing:**
+        1. Decrypt payload (AES-128)
+        2. Decode to JSON
+        3. Send HTTP POST to backend
+        
+        **Device Activation:**
+        - Mode: OTAA
+        - DevEUI: 16 hex chars
+        - AppKey: 32 hex chars
+    end note
+}
+
+' =====================================
+' CAPA DE BACKEND
+' =====================================
+
+package "Backend Layer - ASP.NET Core 8.0" {
+    
+    component "API Gateway" as APIGateway
+    component "CORS Middleware" as CORSMiddleware
+    component "JWT Authentication" as JWTAuth
+    component "Request Logging" as RequestLogging
+    component "Exception Handler" as ExceptionHandler
+    
+    APIGateway --> CORSMiddleware
+    APIGateway --> JWTAuth
+    APIGateway --> RequestLogging
+    APIGateway --> ExceptionHandler
+    
+    package "Controllers Layer" {
+        component "AlertaController" as AlertaCtrl
+        component "UserController" as UserCtrl
+        component "DeviceController" as DeviceCtrl
+        component "AtestadoController" as AtestadoCtrl
+        component "OpenDataController" as OpenDataCtrl
+        component "AuthController" as AuthCtrl
+        component "PatrullaController" as PatrullaCtrl
+    }
+    
+    component "SignalR Hub" as SignalRHub
+    component "Connection Manager" as ConnManager
+    component "Group Manager" as GroupManager
+    component "Event Broadcaster" as EventBroadcaster
+    
+    SignalRHub --> ConnManager
+    SignalRHub --> GroupManager
+    SignalRHub --> EventBroadcaster
+    
+    package "Application Layer - Use Cases" {
+        component "RegistrarAlertaUseCase" as RegAlerta
+        component "ActualizarUbicacionUseCase" as ActUbic
+        component "RegistrarUsuarioUseCase" as RegUser
+        component "LoginUseCase" as Login
+        component "ConsultarAtestadosUseCase" as ConsAtestado
+        component "ObtenerOpenDataUseCase" as ObtOpenData
+        component "RegistrarDispositivoTTSUseCase" as RegDevice
+    }
+    
+    package "Infrastructure Layer - Repositories" {
+        component "AlertaRepository" as AlertaRepo
+        component "UserRepository" as UserRepo
+        component "AtestadoRepository" as AtestadoRepo
+        component "DispositivoRepository" as DispositivoRepo
+        component "PatrullaRepository" as PatrullaRepo
+        component "OpenDataRepository" as OpenDataRepo
+    }
+    
+    package "Infrastructure Layer - External Services" {
+        component "FCMService" as FCMService
+        component "FirebaseAuthService" as FirebaseAuth
+        component "TTSDeviceService" as TTSService
+        component "UserConnectionService" as ConnService
+    }
+    
+    note right of APIGateway
+        **Configuración:**
+        - Puerto: 5000
+        - Base URL: http://18.225.31.96:5000
+        - CORS: Origins permitidos
+        - Authentication: Firebase JWT
+        
+        **Endpoints:**
+        - /api/alertas/*
+        - /api/usuarios/*
+        - /api/dispositivos/*
+        - /api/atestados/*
+        - /api/open-data/*
+        - /api/auth/*
+        - /alertaHub (SignalR)
+    end note
+    
+    note right of SignalRHub
+        **SignalR Configuration:**
+        - Protocol: WebSockets
+        - Fallback: SSE, Long Polling
+        - Hub URL: /alertaHub
+        
+        **Eventos Broadcast:**
+        - RecibirAlerta
+        - AlertaTomada
+        - AlertaResuelta
+        - UbicacionPatrullero
+    end note
+}
+
+' =====================================
+' CAPA DE BASE DE DATOS
+' =====================================
+
+cloud "Firebase Platform" {
+    
+    database "Firestore Database" as Firestore {
+        folder "Collections" {
+            component "alertas" as ColAlertas
+            component "usuarios" as ColUsuarios
+            component "atestados_policiales" as ColAtestados
+            component "dispositivos" as ColDispositivos
+            component "patrullas" as ColPatrullas
+            component "open_data" as ColOpenData
+        }
+    }
+    
+    component "Firebase Cloud Messaging" as FCM
+    component "Firebase Authentication" as FBAuth
+    
+    interface "REST API" as FirestoreAPI
+    interface "Admin SDK" as AdminSDK
+    
+    Firestore --> FirestoreAPI
+    FCM --> AdminSDK
+    FBAuth --> AdminSDK
+    
+    note right of Firestore
+        **Colecciones:**
+        
+        **alertas:**
+        - id, DevEUI, lat/lng, fechaHora
+        - estado, nivelUrgencia
+        
+        **usuarios:**
+        - uid, email, nombre, role
+        - fcmTokens[], activo
+        
+        **atestados_policiales:**
+        - alertaId, patrulleroId
+        - victima, agresor, incidente
+        
+        **dispositivos:**
+        - DevEUI, appKey, ttsDeviceId
+        - ubicacion, activo, victimaId
+        
+        **patrullas:**
+        - patrulleroId, ubicacion
+        - timestamp, estado
+        
+        **open_data:**
+        - Datos anonimizados
+    end note
+}
+
+' =====================================
+' CAPA DE APLICACIÓN MÓVIL
+' =====================================
+
+package "Mobile Layer - Flutter App" {
+    
+    component "Main App" as FlutterApp
+    
+    package "Screens" {
+        component "LoginScreen" as LoginScreen
+        component "MapaScreen" as MapaScreen
+        component "AtestadoScreen" as AtestadoScreen
+    }
+    
+    package "Services" {
+        component "SignalRService" as FlutterSignalR
+        component "FCMService" as FlutterFCM
+        component "AuthService" as FlutterAuth
+        component "LocationService" as FlutterLocation
+        component "APIService" as FlutterAPI
+    }
+    
+    component "Google Maps Flutter" as GoogleMapsFlutter
+    
+    FlutterApp --> LoginScreen
+    FlutterApp --> MapaScreen
+    FlutterApp --> AtestadoScreen
+    
+    FlutterApp --> FlutterSignalR
+    FlutterApp --> FlutterFCM
+    FlutterApp --> FlutterAuth
+    FlutterApp --> FlutterLocation
+    FlutterApp --> FlutterAPI
+    
+    MapaScreen --> GoogleMapsFlutter
+    
+    note right of FlutterApp
+        **Framework:** Flutter 3.x
+        **Platform:** iOS + Android
+        **Language:** Dart
+        
+        **Packages:**
+        - signalr_netcore: ^1.3.3
+        - firebase_messaging: ^14.6.0
+        - firebase_auth: ^4.7.0
+        - geolocator: ^9.0.2
+        - google_maps_flutter: ^2.3.0
+        - http: ^1.1.0
+        
+        **Features:**
+        - Real-time alerts (SignalR)
+        - Push notifications (FCM)
+        - GPS tracking (cada 10s)
+        - Route navigation
+    end note
+}
+
+' =====================================
+' CAPA DE APLICACIÓN WEB
+' =====================================
+
+package "Web Layer - React Dashboard" {
+    
+    component "React App" as ReactApp
+    
+    package "Pages" {
+        component "Login" as LoginPage
+        component "Dashboard" as DashboardPage
+        component "MapView" as MapViewPage
+        component "ReportsManagement" as ReportsPage
+        component "UserManagement" as UserMgmtPage
+        component "OpenDataModule" as OpenDataPage
+    }
+    
+    package "Services" {
+        component "SignalRService" as ReactSignalR
+        component "AuthService" as ReactAuth
+        component "APIService" as ReactAPI
+    }
+    
+    component "Google Maps React" as GoogleMapsReact
+    
+    ReactApp --> LoginPage
+    ReactApp --> DashboardPage
+    ReactApp --> MapViewPage
+    ReactApp --> ReportsPage
+    ReactApp --> UserMgmtPage
+    ReactApp --> OpenDataPage
+    
+    ReactApp --> ReactSignalR
+    ReactApp --> ReactAuth
+    ReactApp --> ReactAPI
+    
+    MapViewPage --> GoogleMapsReact
+    DashboardPage --> GoogleMapsReact
+    
+    note right of ReactApp
+        **Framework:** React 18.x
+        **Language:** TypeScript
+        **Build Tool:** Vite
+        
+        **Packages:**
+        - @microsoft/signalr: ^7.0.0
+        - firebase: ^9.23.0
+        - @react-google-maps/api: ^2.19.0
+        - axios: ^1.4.0
+        - recharts: ^2.7.0
+        
+        **Features:**
+        - Real-time dashboard (SignalR)
+        - Heat map visualization
+        - Alert monitoring
+        - User/Device management
+    end note
+}
+
+' =====================================
+' SERVICIOS EXTERNOS
+' =====================================
+
+cloud "External APIs" {
+    component "Google Maps API" as GoogleMapsAPI
+    component "Directions API" as DirectionsAPI
+    component "Geocoding API" as GeocodingAPI
+    component "Maps JavaScript API" as MapsJSAPI
+    
+    GoogleMapsAPI --> DirectionsAPI
+    GoogleMapsAPI --> GeocodingAPI
+    GoogleMapsAPI --> MapsJSAPI
+    
+    note right of GoogleMapsAPI
+        **APIs utilizadas:**
+        
+        **Directions API:**
+        - Cálculo de rutas
+        - ETA con tráfico
+        
+        **Geocoding API:**
+        - Reverse geocoding
+        - Direcciones legibles
+        
+        **Maps JavaScript API:**
+        - Visualización mapas
+        - Marcadores interactivos
+    end note
+}
+
+' =====================================
+' RELACIONES Y FLUJOS
+' =====================================
+
+' Flujo IoT -> LoRaWAN -> Backend
+LoRaWANStack --> SPI
+Gateway --> TTS
+WebhookHTTP --> APIGateway
+
+' API Gateway -> Controllers
+APIGateway --> AlertaCtrl
+APIGateway --> UserCtrl
+APIGateway --> DeviceCtrl
+APIGateway --> AtestadoCtrl
+APIGateway --> OpenDataCtrl
+APIGateway --> AuthCtrl
+APIGateway --> PatrullaCtrl
+
+' Controllers -> Use Cases
+AlertaCtrl --> RegAlerta
+UserCtrl --> RegUser
+UserCtrl --> Login
+DeviceCtrl --> RegDevice
+AtestadoCtrl --> ConsAtestado
+OpenDataCtrl --> ObtOpenData
+PatrullaCtrl --> ActUbic
+
+' Use Cases -> Repositories
+RegAlerta --> AlertaRepo
+RegUser --> UserRepo
+ConsAtestado --> AtestadoRepo
+ObtOpenData --> OpenDataRepo
+RegDevice --> DispositivoRepo
+ActUbic --> PatrullaRepo
+
+' Use Cases -> External Services
+RegAlerta --> FCMService
+RegUser --> FirebaseAuth
+Login --> FirebaseAuth
+RegDevice --> TTSService
+
+' Use Cases -> SignalR Hub
+RegAlerta --> SignalRHub
+ActUbic --> SignalRHub
+
+' SignalR Hub -> Connection Service
+SignalRHub --> ConnService
+
+' Repositories -> Firestore
+AlertaRepo --> FirestoreAPI
+UserRepo --> FirestoreAPI
+AtestadoRepo --> FirestoreAPI
+DispositivoRepo --> FirestoreAPI
+PatrullaRepo --> FirestoreAPI
+OpenDataRepo --> FirestoreAPI
+
+' External Services -> Firebase
+FCMService --> AdminSDK
+FirebaseAuth --> AdminSDK
+
+' TTS Service -> The Things Stack
+TTSService --> gRPCAPI
+
+' SignalR Hub -> Mobile App
+SignalRHub --> FlutterSignalR
+
+' SignalR Hub -> Web App
+SignalRHub --> ReactSignalR
+
+' Flutter App -> Backend API
+FlutterAPI --> APIGateway
+
+' Flutter App -> Firebase
+FlutterAuth --> FBAuth
+FlutterFCM --> FCM
+
+' Flutter App -> Google Maps
+FlutterLocation --> GoogleMapsAPI
+GoogleMapsFlutter --> GoogleMapsAPI
+
+' React App -> Backend API
+ReactAPI --> APIGateway
+
+' React App -> Firebase
+ReactAuth --> FBAuth
+
+' React App -> Google Maps
+GoogleMapsReact --> GoogleMapsAPI
+
+' =====================================
+' LEYENDA
+' =====================================
+
+legend right
+    |= Tipo |= Descripción |
+    | Component | Componentes del Sistema |
+    | Interface | Interfaces de Comunicación |
+    | Database | Base de Datos |
+    | Cloud | Servicios Externos |
+    | Package | Capa Arquitectónica |
+endlegend
+
+@enduml

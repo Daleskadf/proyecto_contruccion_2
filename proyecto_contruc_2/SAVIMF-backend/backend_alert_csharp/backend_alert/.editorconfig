@@ -1,0 +1,7 @@
+root = true
+
+[*.cs]
+# StyleCop rules
+dotnet_diagnostic.SA1600.severity = warning  # Missing XML comment
+dotnet_diagnostic.SA1601.severity = silent   # Elements should be documented
+dotnet_diagnostic.SA1633.severity = silent   # File header

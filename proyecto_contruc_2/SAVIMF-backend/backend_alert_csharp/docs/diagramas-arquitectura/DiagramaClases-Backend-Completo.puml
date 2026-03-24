@@ -1,0 +1,777 @@
+@startuml DiagramaClases_Backend_SAVIMF
+!define ENTITY_COLOR #E8F5E9
+!define USECASE_COLOR #E3F2FD
+!define REPO_COLOR #FFF3E0
+!define SERVICE_COLOR #F3E5F5
+!define CONTROLLER_COLOR #FFEBEE
+!define HUB_COLOR #FCE4EC
+
+title Diagrama de Clases - Backend SAVIMF (Clean Architecture)
+
+' =====================================
+' CAPA DE DOMINIO - ENTIDADES
+' =====================================
+
+package "Domain Layer - Entities" <<Rectangle>> {
+    
+    class AlertaDto <<Entity>> ENTITY_COLOR {
+        + string Id
+        + string DevEUI
+        + double Latitud
+        + double Longitud
+        + DateTime FechaHora
+        + string Estado
+        + string NivelUrgencia
+        + int CantidadActivaciones
+        + string? PatrulleroId
+        + double? DistanciaPatrullero
+        + bool Vencida
+        + DateTime? FechaVencimiento
+        + VictimaDto? Victima
+        --
+        + AlertaDto()
+        + static AlertaDto FromFirestore(DocumentSnapshot doc)
+        + Dictionary<string, object> ToFirestore()
+    }
+    
+    class UsuarioDto <<Entity>> ENTITY_COLOR {
+        + string Uid
+        + string Email
+        + string Nombre
+        + string Apellido
+        + string Dni
+        + string Telefono
+        + string Role
+        + bool Activo
+        + List<string> FcmTokens
+        + DateTime CreadoEn
+        + DateTime ActualizadoEn
+        --
+        + UsuarioDto()
+        + static UsuarioDto FromFirestore(DocumentSnapshot doc)
+        + bool TienePermiso(string permiso)
+    }
+    
+    class AtestadoPolicialDto <<Entity>> ENTITY_COLOR {
+        + string Id
+        + string AlertaId
+        + string PatrulleroId
+        + DateTime FechaHora
+        + UbicacionDto Ubicacion
+        + VictimaDto Victima
+        + AgresorDto Agresor
+        + IncidenteDto Incidente
+        + string EstadoVictima
+        + List<string> MedidasProteccion
+        + DerivacionDto Derivacion
+        + string Observaciones
+        + List<string> Evidencias
+        --
+        + AtestadoPolicialDto()
+        + Dictionary<string, object> ToFirestore()
+    }
+    
+    class DispositivoDto <<Entity>> ENTITY_COLOR {
+        + string Id
+        + string DevEUI
+        + string AppKey
+        + string TTSDeviceId
+        + string Nombre
+        + string Descripcion
+        + UbicacionDto Ubicacion
+        + bool Activo
+        + DateTime? UltimaActivacion
+        + int CantidadAlertas
+        + string? VictimaId
+        + VictimaDto? VictimaVinculada
+        --
+        + DispositivoDto()
+        + bool EsValidoParaActivacion()
+    }
+    
+    class OpenDataDto <<Entity>> ENTITY_COLOR {
+        + string Id
+        + DateTime FechaHora
+        + double LatitudAnonimizada
+        + double LongitudAnonimizada
+        + string NivelUrgencia
+        + int CantidadActivaciones
+        + int? TiempoRespuesta
+        + string Estado
+        + string Departamento
+        + string Provincia
+        + string Distrito
+        + int Mes
+        + int Anio
+        + string DiaSemana
+        --
+        + OpenDataDto()
+        + static OpenDataDto Anonimizar(AlertaDto alerta)
+    }
+    
+    class VictimaDto <<ValueObject>> ENTITY_COLOR {
+        + string Nombre
+        + string Apellido
+        + string Dni
+        + int Edad
+        + string Telefono
+        + string RelacionAgresor
+    }
+    
+    class AgresorDto <<ValueObject>> ENTITY_COLOR {
+        + string Nombre
+        + string Apellido
+        + string Dni
+        + int Edad
+        + string RelacionVictima
+    }
+    
+    class UbicacionDto <<ValueObject>> ENTITY_COLOR {
+        + double Latitud
+        + double Longitud
+        + string? Direccion
+        + string? Referencia
+    }
+    
+    class IncidenteDto <<ValueObject>> ENTITY_COLOR {
+        + List<string> TiposViolencia
+        + string Descripcion
+        + bool LesionesVisibles
+        + string ArmasUtilizadas
+        + bool Testigos
+        + int? NumeroTestigos
+    }
+    
+    class DerivacionDto <<ValueObject>> ENTITY_COLOR {
+        + bool RequiereAtencionMedica
+        + bool RequiereAsistenciaLegal
+        + bool RequiereAsistenciaPsicologica
+    }
+}
+
+' =====================================
+' CAPA DE APLICACIÓN - USE CASES
+' =====================================
+
+package "Application Layer - Use Cases" <<Rectangle>> {
+    
+    abstract class BaseUseCase<TRequest, TResponse> <<Abstract>> USECASE_COLOR {
+        # ILogger Logger
+        --
+        + {abstract} Task<TResponse> EjecutarAsync(TRequest request)
+        # void LogInfo(string message)
+        # void LogError(string message, Exception ex)
+    }
+    
+    class RegistrarAlertaUseCase <<UseCase>> USECASE_COLOR {
+        - IAlertaRepositoryFirestore _alertaRepo
+        - IDispositivoRepositoryFirestore _dispositivoRepo
+        - IHubContext<AlertaHub> _hubContext
+        - IFCMService _fcmService
+        - ILogger<RegistrarAlertaUseCase> _logger
+        --
+        + RegistrarAlertaUseCase(deps...)
+        + Task<AlertaDto> EjecutarAsync(LorawanWebhookDto webhook)
+        - Task<AlertaDto?> BuscarAlertaRecienteAsync(string devEUI, DateTime desde)
+        - string CalcularNivelUrgencia(int cantidadActivaciones)
+        - Task EnviarNotificacionesAsync(AlertaDto alerta)
+        - Task BroadcastSignalRAsync(AlertaDto alerta)
+    }
+    
+    class ActualizarUbicacionPatrullaUseCase <<UseCase>> USECASE_COLOR {
+        - IPatrullaRepositoryFirestore _patrullaRepo
+        - IHubContext<AlertaHub> _hubContext
+        - ILogger<ActualizarUbicacionPatrullaUseCase> _logger
+        --
+        + ActualizarUbicacionPatrullaUseCase(deps...)
+        + Task EjecutarAsync(string patrulleroId, double lat, double lng)
+        - Task BroadcastUbicacionAsync(UbicacionDto ubicacion)
+    }
+    
+    class RegistrarUsuarioUseCase <<UseCase>> USECASE_COLOR {
+        - IUserRepositoryFirestore _userRepo
+        - IFirebaseAuthService _authService
+        - ILogger<RegistrarUsuarioUseCase> _logger
+        --
+        + RegistrarUsuarioUseCase(deps...)
+        + Task<UsuarioDto> EjecutarAsync(RegistrarUsuarioRequestDto request)
+        - Task<bool> ValidarEmailDisponibleAsync(string email)
+        - Task CrearEnFirebaseAuthAsync(string email, string password)
+        - Task CrearEnFirestoreAsync(UsuarioDto usuario)
+    }
+    
+    class EditarUsuarioUseCase <<UseCase>> USECASE_COLOR {
+        - IUserRepositoryFirestore _userRepo
+        - IFirebaseAuthService _authService
+        - ILogger<EditarUsuarioUseCase> _logger
+        --
+        + EditarUsuarioUseCase(deps...)
+        + Task<UsuarioDto> EjecutarAsync(string uid, EditarUsuarioRequestDto request)
+        - Task ActualizarEnFirebaseAuthAsync(string uid, bool activo)
+        - Task ActualizarEnFirestoreAsync(string uid, Dictionary<string, object> updates)
+    }
+    
+    class EliminarUsuarioUseCase <<UseCase>> USECASE_COLOR {
+        - IUserRepositoryFirestore _userRepo
+        - IFirebaseAuthService _authService
+        - ILogger<EliminarUsuarioUseCase> _logger
+        --
+        + EliminarUsuarioUseCase(deps...)
+        + Task EjecutarAsync(string uid)
+        - Task DeshabilitarEnFirebaseAuthAsync(string uid)
+        - Task MarcarComoEliminadoAsync(string uid)
+    }
+    
+    class LoginUseCase <<UseCase>> USECASE_COLOR {
+        - IUserRepositoryFirestore _userRepo
+        - IFirebaseAuthService _authService
+        - ILogger<LoginUseCase> _logger
+        --
+        + LoginUseCase(deps...)
+        + Task<UsuarioDto?> EjecutarAsync(string firebaseToken)
+        - Task<FirebaseToken> VerificarTokenAsync(string token)
+        - Task<UsuarioDto?> ObtenerUsuarioPorUidAsync(string uid)
+    }
+    
+    class RegistrarDispositivoTTSUseCase <<UseCase>> USECASE_COLOR {
+        - IDispositivoRepositoryFirestore _dispositivoRepo
+        - ITTSDeviceService _ttsService
+        - ILogger<RegistrarDispositivoTTSUseCase> _logger
+        --
+        + RegistrarDispositivoTTSUseCase(deps...)
+        + Task<DispositivoDto> EjecutarAsync(RegistrarDispositivoRequestDto request)
+        - Task<bool> VerificarDispositivoExisteAsync(string devEUI)
+        - Task<TTSDeviceDto> CrearEnTTSAsync(DispositivoDto dispositivo)
+        - Task GuardarEnFirestoreAsync(DispositivoDto dispositivo)
+    }
+    
+    class ObtenerOpenDataUseCase <<UseCase>> USECASE_COLOR {
+        - IOpenDataRepositoryFirestore _openDataRepo
+        - ILogger<ObtenerOpenDataUseCase> _logger
+        --
+        + ObtenerOpenDataUseCase(deps...)
+        + Task<OpenDataResponseDto> EjecutarAsync(OpenDataQueryDto query)
+        - Task<List<OpenDataDto>> ConsultarDatosAsync(OpenDataQueryDto query)
+        - EstadisticasOpenDataDto CalcularEstadisticas(List<OpenDataDto> datos)
+    }
+    
+    class ConsultarAtestadosUseCase <<UseCase>> USECASE_COLOR {
+        - IAtestadoPolicialRepositoryFirestore _atestadoRepo
+        - IUserRepositoryFirestore _userRepo
+        - ILogger<ConsultarAtestadosUseCase> _logger
+        --
+        + ConsultarAtestadosUseCase(deps...)
+        + Task<ConsultarAtestadosResponseDto> EjecutarAsync(AtestadoQueryDto query)
+        - Task EnriquecerConDatosPatrulleroAsync(List<AtestadoPolicialDto> atestados)
+        - EstadisticasAtestadosDto CalcularEstadisticas(List<AtestadoPolicialDto> atestados)
+    }
+    
+    class GenerarTestsUseCase <<UseCase>> USECASE_COLOR {
+        - IAlertaRepositoryFirestore _alertaRepo
+        - IUserRepositoryFirestore _userRepo
+        - ILogger<GenerarTestsUseCase> _logger
+        --
+        + GenerarTestsUseCase(deps...)
+        + Task EjecutarAsync(int cantidadAlertas, int cantidadUsuarios)
+        - AlertaDto GenerarAlertaAleatoria()
+        - UsuarioDto GenerarUsuarioAleatorio()
+    }
+}
+
+' =====================================
+' CAPA DE INFRAESTRUCTURA - REPOSITORIES
+' =====================================
+
+package "Infrastructure Layer - Repositories" <<Rectangle>> {
+    
+    interface IAlertaRepositoryFirestore <<Interface>> REPO_COLOR {
+        + Task<AlertaDto> CrearAsync(Dictionary<string, object> data)
+        + Task<AlertaDto?> BuscarPorIdAsync(string id)
+        + Task<List<AlertaDto>> BuscarPorDevEUIAsync(string devEUI, DateTime desde)
+        + Task<List<AlertaDto>> ObtenerActivasAsync()
+        + Task ActualizarEstadoAsync(string id, string estado, string? patrulleroId)
+        + Task ActualizarAsync(string id, Dictionary<string, object> updates)
+        + Task MarcarComoVencidaAsync(string id)
+    }
+    
+    class AlertaRepositoryFirestore <<Repository>> REPO_COLOR {
+        - FirestoreDb _firestore
+        - ILogger<AlertaRepositoryFirestore> _logger
+        - const string COLLECTION_NAME = "alertas"
+        --
+        + AlertaRepositoryFirestore(FirestoreDb db, ILogger logger)
+        + Task<AlertaDto> CrearAsync(Dictionary<string, object> data)
+        + Task<AlertaDto?> BuscarPorIdAsync(string id)
+        + Task<List<AlertaDto>> BuscarPorDevEUIAsync(string devEUI, DateTime desde)
+        + Task<List<AlertaDto>> ObtenerActivasAsync()
+        + Task ActualizarEstadoAsync(string id, string estado, string? patrulleroId)
+        + Task ActualizarAsync(string id, Dictionary<string, object> updates)
+        + Task MarcarComoVencidaAsync(string id)
+        - AlertaDto MapearDesdeFirestore(DocumentSnapshot doc)
+    }
+    
+    interface IUserRepositoryFirestore <<Interface>> REPO_COLOR {
+        + Task<UsuarioDto> CrearAsync(string uid, Dictionary<string, object> data)
+        + Task<UsuarioDto?> BuscarPorUidAsync(string uid)
+        + Task<UsuarioDto?> BuscarPorEmailAsync(string email)
+        + Task<List<UsuarioDto>> ObtenerTodosAsync(string? rolFiltro, bool? activoFiltro)
+        + Task ActualizarAsync(string uid, Dictionary<string, object> updates)
+        + Task AgregarFCMTokenAsync(string uid, string token)
+        + Task RemoverFCMTokenAsync(string uid, string token)
+        + Task<List<string>> ObtenerFCMTokensPorRolAsync(string rol)
+    }
+    
+    class UserRepositoryFirestore <<Repository>> REPO_COLOR {
+        - FirestoreDb _firestore
+        - ILogger<UserRepositoryFirestore> _logger
+        - const string COLLECTION_NAME = "usuarios"
+        --
+        + UserRepositoryFirestore(FirestoreDb db, ILogger logger)
+        + Task<UsuarioDto> CrearAsync(string uid, Dictionary<string, object> data)
+        + Task<UsuarioDto?> BuscarPorUidAsync(string uid)
+        + Task<UsuarioDto?> BuscarPorEmailAsync(string email)
+        + Task<List<UsuarioDto>> ObtenerTodosAsync(string? rolFiltro, bool? activoFiltro)
+        + Task ActualizarAsync(string uid, Dictionary<string, object> updates)
+        + Task AgregarFCMTokenAsync(string uid, string token)
+        + Task RemoverFCMTokenAsync(string uid, string token)
+        + Task<List<string>> ObtenerFCMTokensPorRolAsync(string rol)
+        - UsuarioDto MapearDesdeFirestore(DocumentSnapshot doc)
+    }
+    
+    interface IAtestadoPolicialRepositoryFirestore <<Interface>> REPO_COLOR {
+        + Task<AtestadoPolicialDto> CrearAsync(Dictionary<string, object> data)
+        + Task<AtestadoPolicialDto?> BuscarPorIdAsync(string id)
+        + Task<AtestadoPolicialDto?> BuscarPorAlertaIdAsync(string alertaId)
+        + Task<List<AtestadoPolicialDto>> ConsultarAsync(AtestadoQueryDto query)
+        + Task<byte[]> GenerarPDFAsync(string id)
+    }
+    
+    class AtestadoPolicialRepositoryFirestore <<Repository>> REPO_COLOR {
+        - FirestoreDb _firestore
+        - ILogger<AtestadoPolicialRepositoryFirestore> _logger
+        - const string COLLECTION_NAME = "atestados_policiales"
+        --
+        + AtestadoPolicialRepositoryFirestore(FirestoreDb db, ILogger logger)
+        + Task<AtestadoPolicialDto> CrearAsync(Dictionary<string, object> data)
+        + Task<AtestadoPolicialDto?> BuscarPorIdAsync(string id)
+        + Task<AtestadoPolicialDto?> BuscarPorAlertaIdAsync(string alertaId)
+        + Task<List<AtestadoPolicialDto>> ConsultarAsync(AtestadoQueryDto query)
+        + Task<byte[]> GenerarPDFAsync(string id)
+        - AtestadoPolicialDto MapearDesdeFirestore(DocumentSnapshot doc)
+        - Query AplicarFiltros(Query query, AtestadoQueryDto filtros)
+    }
+    
+    interface IDispositivoRepositoryFirestore <<Interface>> REPO_COLOR {
+        + Task<DispositivoDto> CrearAsync(Dictionary<string, object> data)
+        + Task<DispositivoDto?> BuscarPorIdAsync(string id)
+        + Task<DispositivoDto?> BuscarPorDevEUIAsync(string devEUI)
+        + Task<List<DispositivoDto>> ObtenerTodosAsync()
+        + Task ActualizarAsync(string id, Dictionary<string, object> updates)
+        + Task ActualizarUltimaActivacionAsync(string devEUI, DateTime fecha)
+    }
+    
+    class DispositivoRepositoryFirestore <<Repository>> REPO_COLOR {
+        - FirestoreDb _firestore
+        - ILogger<DispositivoRepositoryFirestore> _logger
+        - const string COLLECTION_NAME = "dispositivos"
+        --
+        + DispositivoRepositoryFirestore(FirestoreDb db, ILogger logger)
+        + Task<DispositivoDto> CrearAsync(Dictionary<string, object> data)
+        + Task<DispositivoDto?> BuscarPorIdAsync(string id)
+        + Task<DispositivoDto?> BuscarPorDevEUIAsync(string devEUI)
+        + Task<List<DispositivoDto>> ObtenerTodosAsync()
+        + Task ActualizarAsync(string id, Dictionary<string, object> updates)
+        + Task ActualizarUltimaActivacionAsync(string devEUI, DateTime fecha)
+        - DispositivoDto MapearDesdeFirestore(DocumentSnapshot doc)
+    }
+    
+    interface IPatrullaRepositoryFirestore <<Interface>> REPO_COLOR {
+        + Task ActualizarUbicacionAsync(string patrulleroId, double lat, double lng, DateTime timestamp)
+        + Task<UbicacionDto?> ObtenerUbicacionActualAsync(string patrulleroId)
+        + Task<List<PatrullaDto>> ObtenerPatrullasActivasAsync()
+    }
+    
+    class PatrullaRepositoryFirestore <<Repository>> REPO_COLOR {
+        - FirestoreDb _firestore
+        - ILogger<PatrullaRepositoryFirestore> _logger
+        - const string COLLECTION_NAME = "patrullas"
+        --
+        + PatrullaRepositoryFirestore(FirestoreDb db, ILogger logger)
+        + Task ActualizarUbicacionAsync(string patrulleroId, double lat, double lng, DateTime timestamp)
+        + Task<UbicacionDto?> ObtenerUbicacionActualAsync(string patrulleroId)
+        + Task<List<PatrullaDto>> ObtenerPatrullasActivasAsync()
+    }
+    
+    interface IOpenDataRepositoryFirestore <<Interface>> REPO_COLOR {
+        + Task<List<OpenDataDto>> ObtenerAlertasAnonimadasAsync(OpenDataQueryDto query)
+        + Task CrearDesdeAlertaAsync(AlertaDto alerta)
+    }
+    
+    class OpenDataRepositoryFirestore <<Repository>> REPO_COLOR {
+        - FirestoreDb _firestore
+        - ILogger<OpenDataRepositoryFirestore> _logger
+        - const string COLLECTION_NAME = "open_data"
+        --
+        + OpenDataRepositoryFirestore(FirestoreDb db, ILogger logger)
+        + Task<List<OpenDataDto>> ObtenerAlertasAnonimadasAsync(OpenDataQueryDto query)
+        + Task CrearDesdeAlertaAsync(AlertaDto alerta)
+        - double AnomimizarCoordenada(double coordenada)
+    }
+}
+
+' =====================================
+' CAPA DE INFRAESTRUCTURA - SERVICES
+' =====================================
+
+package "Infrastructure Layer - Services" <<Rectangle>> {
+    
+    interface IFCMService <<Interface>> SERVICE_COLOR {
+        + Task<bool> EnviarNotificacionAsync(string token, string titulo, string mensaje, Dictionary<string, string>? data)
+        + Task<BatchResponse> EnviarNotificacionMultipleAsync(List<string> tokens, string titulo, string mensaje, Dictionary<string, string>? data)
+    }
+    
+    class FCMService <<Service>> SERVICE_COLOR {
+        - FirebaseMessaging _messaging
+        - ILogger<FCMService> _logger
+        --
+        + FCMService(ILogger logger)
+        + Task<bool> EnviarNotificacionAsync(string token, string titulo, string mensaje, Dictionary<string, string>? data)
+        + Task<BatchResponse> EnviarNotificacionMultipleAsync(List<string> tokens, string titulo, string mensaje, Dictionary<string, string>? data)
+        - Message CrearMensaje(string token, string titulo, string mensaje, Dictionary<string, string>? data)
+        - MulticastMessage CrearMensajeMultiple(List<string> tokens, string titulo, string mensaje, Dictionary<string, string>? data)
+    }
+    
+    interface IFirebaseAuthService <<Interface>> SERVICE_COLOR {
+        + Task<UserRecord> CrearUsuarioAsync(string email, string password)
+        + Task<FirebaseToken> VerifyIdTokenAsync(string idToken)
+        + Task<UserRecord> ActualizarUsuarioAsync(string uid, UserRecordArgs args)
+        + Task DeshabilitarUsuarioAsync(string uid)
+        + Task EliminarUsuarioAsync(string uid)
+    }
+    
+    class FirebaseAuthService <<Service>> SERVICE_COLOR {
+        - FirebaseAuth _auth
+        - ILogger<FirebaseAuthService> _logger
+        --
+        + FirebaseAuthService(ILogger logger)
+        + Task<UserRecord> CrearUsuarioAsync(string email, string password)
+        + Task<FirebaseToken> VerifyIdTokenAsync(string idToken)
+        + Task<UserRecord> ActualizarUsuarioAsync(string uid, UserRecordArgs args)
+        + Task DeshabilitarUsuarioAsync(string uid)
+        + Task EliminarUsuarioAsync(string uid)
+    }
+    
+    interface ITTSDeviceService <<Interface>> SERVICE_COLOR {
+        + Task<TTSDeviceDto> CrearDispositivoAsync(string devEUI, string appKey, string nombre)
+        + Task<TTSDeviceDto?> ObtenerDispositivoAsync(string devEUI)
+        + Task<bool> EliminarDispositivoAsync(string devEUI)
+        + Task<bool> ConfigurarWebhookAsync()
+    }
+    
+    class TTSDeviceService <<Service>> SERVICE_COLOR {
+        - HttpClient _httpClient
+        - string _ttsApiKey
+        - string _ttsApplicationId
+        - ILogger<TTSDeviceService> _logger
+        --
+        + TTSDeviceService(IConfiguration config, ILogger logger)
+        + Task<TTSDeviceDto> CrearDispositivoAsync(string devEUI, string appKey, string nombre)
+        + Task<TTSDeviceDto?> ObtenerDispositivoAsync(string devEUI)
+        + Task<bool> EliminarDispositivoAsync(string devEUI)
+        + Task<bool> ConfigurarWebhookAsync()
+        - EndDevice CrearPayloadTTS(string devEUI, string appKey, string nombre)
+        - string HexStringToBase64(string hex)
+    }
+    
+    interface IUserConnectionService <<Interface>> SERVICE_COLOR {
+        + Task AddConnectionAsync(string userId, string connectionId, string role)
+        + Task RemoveConnectionAsync(string connectionId)
+        + Task<List<string>> GetConnectionsByUserIdAsync(string userId)
+        + Task<List<string>> GetConnectionsByRoleAsync(string role)
+    }
+    
+    class UserConnectionService <<Service>> SERVICE_COLOR {
+        - ConcurrentDictionary<string, UserConnection> _connections
+        - ILogger<UserConnectionService> _logger
+        --
+        + UserConnectionService(ILogger logger)
+        + Task AddConnectionAsync(string userId, string connectionId, string role)
+        + Task RemoveConnectionAsync(string connectionId)
+        + Task<List<string>> GetConnectionsByUserIdAsync(string userId)
+        + Task<List<string>> GetConnectionsByRoleAsync(string role)
+    }
+}
+
+' =====================================
+' CAPA DE PRESENTACIÓN - CONTROLLERS
+' =====================================
+
+package "Presentation Layer - Controllers" <<Rectangle>> {
+    
+    class AlertaController <<Controller>> CONTROLLER_COLOR {
+        - RegistrarAlertaUseCase _registrarUseCase
+        - IAlertaRepositoryFirestore _alertaRepo
+        - ILogger<AlertaController> _logger
+        --
+        + AlertaController(deps...)
+        + Task<IActionResult> RegistrarLorawanWebhook([FromBody] LorawanWebhookDto body)
+        + Task<IActionResult> ObtenerAlertas([FromQuery] string? estado, [FromQuery] int? limit)
+        + Task<IActionResult> ObtenerAlertaPorId([FromRoute] string id)
+        + Task<IActionResult> ActualizarEstado([FromRoute] string id, [FromBody] ActualizarEstadoDto body)
+    }
+    
+    class UserController <<Controller>> CONTROLLER_COLOR {
+        - RegistrarUsuarioUseCase _registrarUseCase
+        - EditarUsuarioUseCase _editarUseCase
+        - EliminarUsuarioUseCase _eliminarUseCase
+        - IUserRepositoryFirestore _userRepo
+        - ILogger<UserController> _logger
+        --
+        + UserController(deps...)
+        + Task<IActionResult> RegistrarUsuario([FromBody] RegistrarUsuarioRequestDto body)
+        + Task<IActionResult> EditarUsuario([FromRoute] string uid, [FromBody] EditarUsuarioRequestDto body)
+        + Task<IActionResult> EliminarUsuario([FromRoute] string uid)
+        + Task<IActionResult> ObtenerUsuarios([FromQuery] string? role, [FromQuery] bool? activo)
+        + Task<IActionResult> ObtenerUsuarioPorId([FromRoute] string uid)
+        + Task<IActionResult> RegistrarFCMToken([FromBody] RegistrarFCMTokenDto body)
+    }
+    
+    class AuthController <<Controller>> CONTROLLER_COLOR {
+        - LoginUseCase _loginUseCase
+        - ILogger<AuthController> _logger
+        --
+        + AuthController(deps...)
+        + Task<IActionResult> LoginWithFirebase([FromBody] LoginFirebaseRequestDto body)
+        + Task<IActionResult> ValidarToken([FromHeader] string authorization)
+    }
+    
+    class DeviceController <<Controller>> CONTROLLER_COLOR {
+        - RegistrarDispositivoTTSUseCase _registrarUseCase
+        - IDispositivoRepositoryFirestore _dispositivoRepo
+        - ILogger<DeviceController> _logger
+        --
+        + DeviceController(deps...)
+        + Task<IActionResult> RegistrarDispositivo([FromBody] RegistrarDispositivoRequestDto body)
+        + Task<IActionResult> ObtenerDispositivos()
+        + Task<IActionResult> ObtenerDispositivoPorId([FromRoute] string id)
+        + Task<IActionResult> VincularDispositivo([FromRoute] string id, [FromBody] VincularDispositivoDto body)
+    }
+    
+    class AtestadoController <<Controller>> CONTROLLER_COLOR {
+        - IAtestadoPolicialRepositoryFirestore _atestadoRepo
+        - ConsultarAtestadosUseCase _consultarUseCase
+        - ILogger<AtestadoController> _logger
+        --
+        + AtestadoController(deps...)
+        + Task<IActionResult> CrearAtestado([FromBody] CrearAtestadoRequestDto body)
+        + Task<IActionResult> ConsultarAtestados([FromQuery] AtestadoQueryDto query)
+        + Task<IActionResult> ObtenerAtestadoPorId([FromRoute] string id)
+        + Task<IActionResult> DescargarPDF([FromRoute] string id)
+    }
+    
+    class OpenDataController <<Controller>> CONTROLLER_COLOR {
+        - ObtenerOpenDataUseCase _obtenerUseCase
+        - ILogger<OpenDataController> _logger
+        --
+        + OpenDataController(deps...)
+        + Task<IActionResult> ObtenerOpenData([FromQuery] OpenDataQueryDto query)
+        + Task<IActionResult> ExportarCSV([FromQuery] OpenDataQueryDto query)
+    }
+    
+    class PatrullaController <<Controller>> CONTROLLER_COLOR {
+        - ActualizarUbicacionPatrullaUseCase _actualizarUseCase
+        - IPatrullaRepositoryFirestore _patrullaRepo
+        - ILogger<PatrullaController> _logger
+        --
+        + PatrullaController(deps...)
+        + Task<IActionResult> ActualizarUbicacion([FromBody] ActualizarUbicacionDto body)
+        + Task<IActionResult> ObtenerPatrullasActivas()
+    }
+}
+
+' =====================================
+' CAPA DE PRESENTACIÓN - SIGNALR HUB
+' =====================================
+
+package "Presentation Layer - SignalR Hub" <<Rectangle>> {
+    
+    class AlertaHub <<Hub>> HUB_COLOR {
+        - IUserConnectionService _connectionService
+        - IPatrullaRepositoryFirestore _patrullaRepo
+        - IAlertaRepositoryFirestore _alertaRepo
+        - ILogger<AlertaHub> _logger
+        --
+        + AlertaHub(deps...)
+        + override Task OnConnectedAsync()
+        + override Task OnDisconnectedAsync(Exception? exception)
+        + Task TomarAlerta(string alertaId, string patrulleroId)
+        + Task ActualizarUbicacion(double latitud, double longitud, string patrulleroId)
+        + Task ResolverAlerta(string alertaId)
+        - string? GetUserId()
+        - string? GetUserRole()
+    }
+}
+
+' =====================================
+' CAPA DE CONFIGURACIÓN
+' =====================================
+
+package "Configuration Layer" <<Rectangle>> {
+    
+    class Program <<Startup>> #FFF9C4 {
+        + {static} void Main(string[] args)
+        + {static} IHostBuilder CreateHostBuilder(string[] args)
+        - {static} void ConfigureServices(IServiceCollection services)
+        - {static} void ConfigureFirebase(IConfiguration config)
+        - {static} void ConfigureSignalR(IServiceCollection services)
+        - {static} void ConfigureCors(IServiceCollection services)
+    }
+    
+    class DependencyInjection <<Configuration>> #FFF9C4 {
+        + {static} IServiceCollection AddRepositories(this IServiceCollection services)
+        + {static} IServiceCollection AddUseCases(this IServiceCollection services)
+        + {static} IServiceCollection AddServices(this IServiceCollection services)
+        + {static} IServiceCollection AddFirebaseServices(this IServiceCollection services)
+    }
+}
+
+' =====================================
+' RELACIONES
+' =====================================
+
+' Herencia de Use Cases
+RegistrarAlertaUseCase --|> BaseUseCase
+ActualizarUbicacionPatrullaUseCase --|> BaseUseCase
+RegistrarUsuarioUseCase --|> BaseUseCase
+EditarUsuarioUseCase --|> BaseUseCase
+EliminarUsuarioUseCase --|> BaseUseCase
+LoginUseCase --|> BaseUseCase
+RegistrarDispositivoTTSUseCase --|> BaseUseCase
+ObtenerOpenDataUseCase --|> BaseUseCase
+ConsultarAtestadosUseCase --|> BaseUseCase
+GenerarTestsUseCase --|> BaseUseCase
+
+' Implementación de Interfaces
+AlertaRepositoryFirestore ..|> IAlertaRepositoryFirestore
+UserRepositoryFirestore ..|> IUserRepositoryFirestore
+AtestadoPolicialRepositoryFirestore ..|> IAtestadoPolicialRepositoryFirestore
+DispositivoRepositoryFirestore ..|> IDispositivoRepositoryFirestore
+PatrullaRepositoryFirestore ..|> IPatrullaRepositoryFirestore
+OpenDataRepositoryFirestore ..|> IOpenDataRepositoryFirestore
+
+FCMService ..|> IFCMService
+FirebaseAuthService ..|> IFirebaseAuthService
+TTSDeviceService ..|> ITTSDeviceService
+UserConnectionService ..|> IUserConnectionService
+
+' Composición - Entidades
+AlertaDto *-- VictimaDto
+AlertaDto *-- UbicacionDto
+AtestadoPolicialDto *-- VictimaDto
+AtestadoPolicialDto *-- AgresorDto
+AtestadoPolicialDto *-- UbicacionDto
+AtestadoPolicialDto *-- IncidenteDto
+AtestadoPolicialDto *-- DerivacionDto
+DispositivoDto *-- UbicacionDto
+DispositivoDto *-- VictimaDto
+
+' Dependencias de Use Cases
+RegistrarAlertaUseCase --> IAlertaRepositoryFirestore
+RegistrarAlertaUseCase --> IDispositivoRepositoryFirestore
+RegistrarAlertaUseCase --> IFCMService
+RegistrarAlertaUseCase --> AlertaHub
+
+ActualizarUbicacionPatrullaUseCase --> IPatrullaRepositoryFirestore
+ActualizarUbicacionPatrullaUseCase --> AlertaHub
+
+RegistrarUsuarioUseCase --> IUserRepositoryFirestore
+RegistrarUsuarioUseCase --> IFirebaseAuthService
+
+EditarUsuarioUseCase --> IUserRepositoryFirestore
+EditarUsuarioUseCase --> IFirebaseAuthService
+
+EliminarUsuarioUseCase --> IUserRepositoryFirestore
+EliminarUsuarioUseCase --> IFirebaseAuthService
+
+LoginUseCase --> IUserRepositoryFirestore
+LoginUseCase --> IFirebaseAuthService
+
+RegistrarDispositivoTTSUseCase --> IDispositivoRepositoryFirestore
+RegistrarDispositivoTTSUseCase --> ITTSDeviceService
+
+ObtenerOpenDataUseCase --> IOpenDataRepositoryFirestore
+
+ConsultarAtestadosUseCase --> IAtestadoPolicialRepositoryFirestore
+ConsultarAtestadosUseCase --> IUserRepositoryFirestore
+
+' Dependencias de Controllers
+AlertaController --> RegistrarAlertaUseCase
+AlertaController --> IAlertaRepositoryFirestore
+
+UserController --> RegistrarUsuarioUseCase
+UserController --> EditarUsuarioUseCase
+UserController --> EliminarUsuarioUseCase
+UserController --> IUserRepositoryFirestore
+
+AuthController --> LoginUseCase
+
+DeviceController --> RegistrarDispositivoTTSUseCase
+DeviceController --> IDispositivoRepositoryFirestore
+
+AtestadoController --> ConsultarAtestadosUseCase
+AtestadoController --> IAtestadoPolicialRepositoryFirestore
+
+OpenDataController --> ObtenerOpenDataUseCase
+
+PatrullaController --> ActualizarUbicacionPatrullaUseCase
+PatrullaController --> IPatrullaRepositoryFirestore
+
+' Dependencias de Hub
+AlertaHub --> IUserConnectionService
+AlertaHub --> IPatrullaRepositoryFirestore
+AlertaHub --> IAlertaRepositoryFirestore
+
+' Configuración
+Program --> DependencyInjection
+
+note right of Program
+  **Archivo:** Program.cs
+  
+  **Configuración:**
+  - Firebase Admin SDK
+  - SignalR WebSockets
+  - CORS Policy
+  - Dependency Injection
+  - Swagger/OpenAPI
+  
+  **Puerto:** 5000
+  **Base URL:** http://18.225.31.96:5000
+end note
+
+note right of AlertaHub
+  **Archivo:** AlertaHub.cs
+  
+  **Eventos SignalR:**
+  - RecibirAlerta
+  - AlertaTomada
+  - AlertaResuelta
+  - UbicacionPatrullero
+  
+  **Grupos:**
+  - Patrulleros
+  - Dashboard
+end note
+
+note bottom of BaseUseCase
+  **Patrón:** Clean Architecture
+  
+  Todos los Use Cases heredan de BaseUseCase
+  y siguen el patrón Command/Query
+  
+  **Responsabilidades:**
+  - Lógica de negocio
+  - Coordinación de repositorios
+  - Logging centralizado
+end note
+
+@enduml

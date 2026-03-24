@@ -1,0 +1,124 @@
+@startuml diagrama_arq_backend
+title SAVIMF Backend - Diagrama de Arquitectura (Clean Architecture)
+skinparam handwritten false
+skinparam componentStyle rectangle
+
+' --- Leyenda ---
+legend left
+  |||
+  = Componentes del proyecto
+  --> = flujo / llamada
+endlegend
+
+' --- Capas ---
+package "WebAPI (entrada HTTP / SignalR)" #DDDDFF {
+  [AlertaController\n(api/alerta)] as AlertaController
+  [PatrullaController\n(api/patrulla)] as PatrullaController
+  [AuthController\n(api/auth)] as AuthController
+  [AlertaHub\n(SignalR Hub)] as AlertaHub
+  [Filters\nFirebaseAuthGuard] as FirebaseAuthGuard
+  [DTOs / Models] as DTOs
+}
+
+package "Application (Use Cases)" #CCFFCC {
+  [RegistrarAlertaUseCase]
+  [ListarAlertasUseCase]
+  [ActualizarUbicacionPatrullaUseCase]
+  [LoginUseCase]
+  [ValidadorDatosService]
+}
+
+package "Domain (Entidades / Interfaces)" #FFEEAA {
+  [Alerta]
+  [Patrulla]
+  [Usuario]
+  [IAlertaRepository]
+  [IPatrulleroRepository]
+  [IUserRepositoryFirestore]
+  [IFirebaseAuthService]
+}
+
+package "Infrastructure (Implementaciones)" #FFEEDD {
+  [AlertaRepositoryFirestore]
+  [PatrullaRepositoryFirestore]
+  [UserRepositoryFirestore]
+  [FirebaseAuthService]
+  [TTSDeviceService]
+  [HttpClientFactory]
+}
+
+' --- Sistemas externos ---
+cloud "The Things Stack\n(LoRaWAN)" as TTS #E8F1FF
+cloud "Google Firebase\n(Auth + Firestore)" as Firebase #FFF0E0
+actor "Mobile App\n(Flutter)" as Mobile #F8F8FF
+actor "Dashboard\n(Web)" as Dashboard #F8F8FF
+
+' --- Relaciones: Entradas externas al WebAPI ---
+TTS --> AlertaController : webhook POST\n/devices -> /api/alerta/lorawan-webhook
+Mobile --> PatrullaController : POST /api/patrulla/ubicacion\nAuthorization: Bearer <token>
+Mobile --> AuthController : POST /api/auth/firebase\n{idToken}
+Dashboard --> AuthController : POST /api/auth/firebase\n{idToken}
+
+' --- Middleware / filtros ---
+Mobile --> FirebaseAuthGuard : Authorization header
+Dashboard --> FirebaseAuthGuard
+FirebaseAuthGuard --> AuthController : permite acceso si token válido
+FirebaseAuthGuard --> PatrullaController
+FirebaseAuthGuard --> AlertaController
+
+' --- Controllers -> UseCases (orquestación) ---
+AlertaController --> RegistrarAlertaUseCase : Crear alerta (dominio)
+AlertaController --> ListarAlertasUseCase : Obtener alertas
+PatrullaController --> ActualizarUbicacionPatrullaUseCase : Guardar ubicación
+AuthController --> LoginUseCase : Verificar token + rol
+
+' --- UseCases -> Domain / Repositorios ---
+RegistrarAlertaUseCase --> Alerta : crea entidad
+RegistrarAlertaUseCase --> IAlertaRepository : usa
+ListarAlertasUseCase --> IAlertaRepository : usa
+ActualizarUbicacionPatrullaUseCase --> IPatrulleroRepository : usa
+LoginUseCase --> IFirebaseAuthService : verifica token
+LoginUseCase --> IUserRepositoryFirestore : obtiene rol
+
+' --- Interfaces implementadas por Infrastructure ---
+IAlertaRepository ..> AlertaRepositoryFirestore : <<implementa>>
+IPatrulleroRepository ..> PatrullaRepositoryFirestore : <<implementa>>
+IUserRepositoryFirestore ..> UserRepositoryFirestore : <<implementa>>
+IFirebaseAuthService ..> FirebaseAuthService : <<implementa>>
+
+' --- Infrastructure -> Sistemas externos ---
+AlertaRepositoryFirestore --> Firebase : Firestore reads/writes
+PatrullaRepositoryFirestore --> Firebase : Firestore reads/writes
+UserRepositoryFirestore --> Firebase : Firestore reads/writes
+FirebaseAuthService --> Firebase : VerifyIdTokenAsync / GetUserAsync
+TTSDeviceService --> TTS : HTTP API (provisioning / device management)
+HttpClientFactory --> TTS
+
+' --- Notificaciones en tiempo real (Observer / SignalR) ---
+AlertaController --> AlertaHub : IHubContext.SendAsync("NuevaAlerta")
+PatrullaController --> AlertaHub : IHubContext.SendAsync("UbicacionPatrullaActualizada")
+AlertaHub --> Dashboard : push events (NuevaAlerta, AlertaTomada)
+AlertaHub --> Mobile : push events
+
+' --- Dependency Injection (registro en Program.cs) ---
+note right of HttpClientFactory
+  Program.cs registra:
+  - FirestoreDb (Singleton)
+  - Repositories (AddScoped<I... , Impl>)
+  - UseCases (AddScoped)
+  - Services (IFirebaseAuthService, ITTSDeviceService)
+  - SignalR (AddSignalR)
+end note
+
+' --- Patrón y explicación corta ---
+note bottom
+  Patrones destacados:
+  - Clean Architecture (capas: WebAPI, Application, Domain, Infrastructure)
+  - Repository Pattern (I*Repository ↔ *RepositoryFirestore)
+  - Dependency Injection (Program.cs registra dependencias)
+  - Observer (SignalR: AlertaHub envia eventos a clientes)
+  - Command/DTOs (Request DTOs actúan como comandos)
+end note
+
+' --- Fin ---
+@enduml

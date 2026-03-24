@@ -1,0 +1,784 @@
+@startuml SAVIMF Backend - Diagrama de Clases con Patrones de Diseño
+!theme cerulean-outline
+title **🎯 SAVIMF Backend - Diagrama de Clases + Patrones de Diseño**\n**Sistema de Alertas de Emergencia - 21 Patrones Implementados**
+
+skinparam packageStyle rectangle
+skinparam class {
+    BackgroundColor<<Entity>> LightBlue
+    BackgroundColor<<UseCase>> LightGreen
+    BackgroundColor<<Repository>> LightYellow
+    BackgroundColor<<Controller>> LightCoral
+    BackgroundColor<<DTO>> LightGray
+    BackgroundColor<<Service>> LightPink
+    BackgroundColor<<Hub>> Orange
+    BackgroundColor<<Filter>> Wheat
+    BackgroundColor<<Interface>> LightCyan
+    BackgroundColor<<Singleton>> LightGreen
+    BackgroundColor<<Factory>> LightGreen
+    BackgroundColor<<Adapter>> LightBlue
+    BackgroundColor<<Facade>> LightBlue
+    BackgroundColor<<Decorator>> LightBlue
+    BackgroundColor<<Observer>> LightYellow
+    BackgroundColor<<Command>> LightYellow
+    BackgroundColor<<Mediator>> LightYellow
+    BackgroundColor<<Strategy>> LightYellow
+}
+
+' ========== CAPA DOMAIN (NÚCLEO) ==========
+package "🎯 **Domain Layer - LAYERED ARCHITECTURE PATTERN**\n**(Entidades + Interfaces - Núcleo del Negocio)**" {
+    
+    ' === ENTIDADES DE DOMINIO ===
+    class Alerta <<Entity>> {
+        +string Id
+        +string DevEUI
+        +double Lat
+        +double Lon
+        +double Bateria
+        +DateTime Timestamp
+        +string DeviceId
+        +string NombreVictima
+        +string Estado
+        +DateTime? FechaEnCamino
+        +DateTime? FechaResuelto
+        +DateTime? FechaTomada
+        +string PatrulleroAsignado
+        --
+        +Alerta(devEUI, lat, lon, bateria, timestamp, deviceId, nombreVictima)
+        +Alerta(constructor completo con estado)
+    }
+    
+    class Patrulla <<Entity>> {
+        +string PatrulleroId
+        +double Lat
+        +double Lon
+        +DateTime Timestamp
+        --
+        +Patrulla(patrulleroId, lat, lon, timestamp)
+    }
+    
+    class Usuario <<Entity>> {
+        +string Uid
+        +string Email
+        +string Role
+        --
+        +Usuario(uid, email, role)
+        +bool EsOperador()
+        +bool EsPatrulla()
+    }
+    
+    ' === INTERFACES DE REPOSITORIOS (STRATEGY PATTERN) ===
+    interface IAlertaRepository <<Interface>> <<Strategy>> {
+        +Task SaveAsync(Alerta alerta)
+        +Task<List<Alerta>> ListarAlertasAsync()
+        +Task UpdateFieldsAsync(string alertaId, IDictionary<string, object> updates)
+    }
+    
+    interface IPatrulleroRepository <<Interface>> <<Strategy>> {
+        +Task SaveAsync(Patrulla patrulla)
+        +Task<List<Patrulla>> GetUltimasPatrullasAsync()
+    }
+    
+    interface IUserRepositoryFirestore <<Interface>> <<Strategy>> {
+        +Task<string> GetRoleByUidAsync(string uid)
+        +Task<UsuarioDto?> BuscarPorDeviceIdAsync(string deviceId)
+        +Task<UsuarioDto?> BuscarPorDniAsync(string dni)
+        +Task VincularDispositivoAsync(VincularDispositivoDto dto)
+    }
+    
+    interface IDispositivoRepository <<Interface>> <<Strategy>> {
+        +Task SaveAsync(DispositivoTTSDto dispositivo)
+        +Task<List<DispositivoTTSDto>> ListarAsync()
+        +Task<DispositivoTTSDto?> BuscarPorDeviceIdAsync(string deviceId)
+    }
+    
+    interface IFirebaseAuthService <<Interface>> <<Strategy>> {
+        +Task<UsuarioFirebaseDto> VerifyIdTokenAsync(string idToken)
+    }
+    
+    interface ITTSDeviceService <<Interface>> <<Strategy>> {
+        +Task RegistrarDispositivoAsync(string deviceId, string devEui, string joinEui, string appKey)
+        +Task<List<DispositivoTTSDto>> ListarDispositivosAsync()
+    }
+    
+    note as STRATEGY_PATTERN_NOTE
+        **🎯 STRATEGY PATTERN**
+        Las interfaces permiten múltiples
+        implementaciones intercambiables:
+        • IFirebaseAuthService
+        • IAlertaRepository  
+        • ITTSDeviceService
+        
+        Algoritmos intercambiables
+        sin modificar el código cliente
+    end note
+}
+
+' ========== CAPA APPLICATION (CASOS DE USO) ==========
+package "📋 **Application Layer - FACADE PATTERN**\n**(Use Cases - Lógica de Aplicación)**" {
+    
+    ' === CASOS DE USO DE ALERTAS ===
+    class RegistrarAlertaUseCase <<UseCase>> <<Facade>> {
+        -IAlertaRepository _alertaRepository
+        --
+        +RegistrarAlertaUseCase(IAlertaRepository repository)
+        +Task EjecutarAsync(Alerta alerta)
+    }
+    
+    class ListarAlertasUseCase <<UseCase>> <<Facade>> {
+        -IAlertaRepository _alertaRepository
+        --
+        +ListarAlertasUseCase(IAlertaRepository repository)
+        +Task<List<Alerta>> EjecutarAsync()
+    }
+    
+    ' === CASOS DE USO DE PATRULLAS ===
+    class ActualizarUbicacionPatrullaUseCase <<UseCase>> <<Facade>> {
+        -IPatrulleroRepository _patrullaRepository
+        --
+        +ActualizarUbicacionPatrullaUseCase(IPatrulleroRepository repository)
+        +Task EjecutarAsync(string patrulleroId, double lat, double lon)
+    }
+    
+    class ListarUbicacionesPatrullasUseCase <<UseCase>> <<Facade>> {
+        -IPatrulleroRepository _patrullaRepository
+        --
+        +ListarUbicacionesPatrullasUseCase(IPatrulleroRepository repository)
+        +Task<List<Patrulla>> EjecutarAsync()
+    }
+    
+    ' === CASOS DE USO DE AUTENTICACIÓN ===
+    class LoginUseCase <<UseCase>> <<Facade>> {
+        -IFirebaseAuthService _firebaseAuthService
+        -IUserRepositoryFirestore _userRepo
+        --
+        +LoginUseCase(IFirebaseAuthService authService, IUserRepositoryFirestore userRepo)
+        +Task<Usuario?> EjecutarAsync(string token)
+    }
+    
+    ' === CASOS DE USO DE USUARIOS ===
+    class BuscarUsuarioPorDniUseCase <<UseCase>> <<Facade>> {
+        -IUserRepositoryFirestore _userRepository
+        --
+        +BuscarUsuarioPorDniUseCase(IUserRepositoryFirestore userRepository)
+        +Task<UsuarioDto?> EjecutarAsync(string dni, string? role = null)
+    }
+    
+    class VincularDispositivoUseCase <<UseCase>> <<Facade>> {
+        -IUserRepositoryFirestore _userRepository
+        --
+        +VincularDispositivoUseCase(IUserRepositoryFirestore userRepository)
+        +Task<string> EjecutarAsync(VincularDispositivoDto dto)
+    }
+    
+    ' === CASOS DE USO DE DISPOSITIVOS ===
+    class RegistrarDispositivoTTSUseCase <<UseCase>> <<Facade>> {
+        -ITTSDeviceService _ttsDeviceService
+        -IDispositivoRepository _dispositivoRepository
+        --
+        +RegistrarDispositivoTTSUseCase(ITTSDeviceService ttsService, IDispositivoRepository dispositivoRepo)
+        +Task EjecutarAsync(string deviceId, string devEui, string joinEui, string appKey)
+    }
+    
+    class ListarDispositivosConVinculoUseCase <<UseCase>> <<Facade>> {
+        -IDispositivoRepository _dispositivoRepository
+        -IUserRepositoryFirestore _userRepository
+        --
+        +ListarDispositivosConVinculoUseCase(IDispositivoRepository dispositivoRepo, IUserRepositoryFirestore userRepo)
+        +Task<List<DispositivoListadoDto>> EjecutarAsync()
+    }
+    
+    class ListarDispositivosTTSUseCase <<UseCase>> <<Facade>> {
+        -ITTSDeviceService _ttsDeviceService
+        --
+        +ListarDispositivosTTSUseCase(ITTSDeviceService ttsDeviceService)
+        +Task<List<DispositivoTTSDto>> EjecutarAsync()
+    }
+    
+    note as FACADE_PATTERN_NOTE
+        **🏢 FACADE PATTERN**
+        Los Use Cases proporcionan
+        una interfaz simple para
+        operaciones complejas que
+        involucran múltiples servicios
+        
+        Simplifican la complejidad
+        del sistema para el cliente
+    end note
+    
+    note as DEPENDENCY_INJECTION_NOTE
+        **💉 DEPENDENCY INJECTION PATTERN**
+        Todos los Use Cases reciben
+        dependencias por constructor,
+        implementando IoC (Inversión de Control)
+        
+        Desacopla la creación de objetos
+        de su uso
+    end note
+}
+
+' ========== CAPA INFRASTRUCTURE (IMPLEMENTACIONES) ==========
+package "🔧 **Infrastructure Layer - ADAPTER + REPOSITORY + SINGLETON**\n**(Implementaciones Técnicas - Detalles Externos)**" {
+    
+    ' === REPOSITORIOS FIRESTORE (REPOSITORY + ADAPTER PATTERN) ===
+    class AlertaRepositoryFirestore <<Repository>> <<Adapter>> {
+        -FirestoreDb _firestoreDb
+        --
+        +AlertaRepositoryFirestore(FirestoreDb firestoreDb)
+        +Task SaveAsync(Alerta alerta)
+        +Task<List<Alerta>> ListarAlertasAsync()
+        +Task UpdateFieldsAsync(string alertaId, IDictionary updates)
+    }
+    
+    class PatrullaRepositoryFirestore <<Repository>> <<Adapter>> {
+        -FirestoreDb _firestoreDb
+        --
+        +PatrullaRepositoryFirestore(FirestoreDb firestoreDb)
+        +Task SaveAsync(Patrulla patrulla)
+        +Task<List<Patrulla>> GetUltimasPatrullasAsync()
+    }
+    
+    class UserRepositoryFirestore <<Repository>> <<Adapter>> {
+        -FirestoreDb _firestoreDb
+        --
+        +UserRepositoryFirestore(FirestoreDb firestoreDb)
+        +Task<string> GetRoleByUidAsync(string uid)
+        +Task<UsuarioDto?> BuscarPorDeviceIdAsync(string deviceId)
+        +Task<UsuarioDto?> BuscarPorDniAsync(string dni)
+        +Task VincularDispositivoAsync(VincularDispositivoDto dto)
+    }
+    
+    class DispositivoRepositoryFirestore <<Repository>> <<Adapter>> {
+        -FirestoreDb _firestoreDb
+        --
+        +DispositivoRepositoryFirestore(FirestoreDb firestoreDb)
+        +Task SaveAsync(DispositivoTTSDto dispositivo)
+        +Task<List<DispositivoTTSDto>> ListarAsync()
+        +Task<DispositivoTTSDto?> BuscarPorDeviceIdAsync(string deviceId)
+    }
+    
+    note as REPOSITORY_PATTERN_NOTE
+        **📚 REPOSITORY PATTERN**
+        Abstrae el acceso a datos y
+        desacopla el dominio de la
+        persistencia (Firestore)
+        
+        Centraliza la lógica de acceso
+        a datos
+    end note
+    
+    note as ADAPTER_PATTERN_NOTE
+        **🔌 ADAPTER PATTERN**
+        Los repositorios adaptan la
+        API de Firestore a las
+        interfaces del dominio
+        
+        Convierte interfaces incompatibles
+    end note
+    
+    ' === SINGLETON INSTANCES ===
+    class FirestoreDb <<Singleton>> {
+        -static FirestoreDb _instance
+        --
+        +Collection(string path)
+        +GetSnapshotAsync()
+        +AddAsync()
+        +UpdateAsync()
+    }
+    
+    class FirebaseApp <<Singleton>> {
+        -static FirebaseApp _defaultInstance
+        --
+        +DefaultInstance : FirebaseApp
+        +Create(AppOptions options)
+    }
+    
+    note as SINGLETON_PATTERN_NOTE
+        **🔒 SINGLETON PATTERN**
+        Una sola instancia compartida:
+        • FirestoreDb (conexión BD)
+        • FirebaseApp (configuración)
+        
+        Controla la creación de instancias
+        y proporciona acceso global
+    end note
+    
+    ' === SERVICIOS DE AUTENTICACIÓN (ADAPTER) ===
+    class FirebaseAuthService <<Service>> <<Adapter>> {
+        -FirebaseApp _firebaseApp
+        --
+        +FirebaseAuthService(FirebaseApp firebaseApp)
+        +Task<UsuarioFirebaseDto> VerifyIdTokenAsync(string idToken)
+    }
+    
+    ' === SERVICIOS DE COMUNICACIÓN (ADAPTER) ===
+    class TTSDeviceService <<Service>> <<Adapter>> {
+        -HttpClient _httpClient
+        -IConfiguration _configuration
+        --
+        +TTSDeviceService(IHttpClientFactory httpClientFactory, IConfiguration configuration)
+        +Task RegistrarDispositivoAsync(string deviceId, string devEui, string joinEui, string appKey)
+        +Task<List<DispositivoTTSDto>> ListarDispositivosAsync()
+    }
+    
+    ' === FACTORY INSTANCES ===
+    class HttpClientFactory <<Factory>> {
+        --
+        +CreateClient() : HttpClient
+        +CreateClient(string name) : HttpClient
+    }
+    
+    note as FACTORY_PATTERN_NOTE
+        **🏭 FACTORY METHOD PATTERN**
+        • HttpClientFactory crea HttpClient
+        • DI Container crea todas las instancias
+        
+        Crea objetos sin especificar
+        su clase concreta exacta
+    end note
+    
+    ' === SERVICIOS DE VALIDACIÓN ===
+    class ValidadorDatosService <<Service>> {
+        --
+        +bool ValidarEmail(string email)
+        +bool ValidarDni(string dni)
+        +bool ValidarTelefono(string telefono)
+        +bool ValidarCoordenadasGPS(double lat, double lon)
+    }
+}
+
+' ========== CAPA WEB API (CONTROLADORES Y DTOS) ==========
+package "🌐 **WebAPI Layer - MVC + COMMAND + OBSERVER + DECORATOR**\n**(Controllers + DTOs + SignalR + Filters)**" {
+    
+    ' === CONTROLADORES (MVC + MEDIATOR PATTERN) ===
+    class AlertaController <<Controller>> <<Mediator>> {
+        -RegistrarAlertaUseCase _registrarAlertaUseCase
+        -ListarAlertasUseCase _listarAlertasUseCase
+        -IUserRepositoryFirestore _userRepository
+        -IHubContext<AlertaHub> _hubContext
+        -IAlertaRepository _alertaRepository
+        --
+        +AlertaController(5 dependencies...)
+        +Task<IActionResult> RegistrarLorawanWebhook(JsonElement data)
+        +Task<IActionResult> ListarAlertas()
+        +Task<IActionResult> TomarAlerta(TomarAlertaRequestDto body)
+        +Task<IActionResult> CambiarEstado(CambiarEstadoRequestDto body)
+    }
+    
+    class PatrullaController <<Controller>> <<Mediator>> {
+        -ActualizarUbicacionPatrullaUseCase _actualizarUbicacionUseCase
+        -ListarUbicacionesPatrullasUseCase _listarUbicacionesUseCase
+        --
+        +PatrullaController(2 dependencies...)
+        +Task<IActionResult> ActualizarUbicacionPatrulla(UbicacionPatrullaDto body)
+        +Task<IActionResult> ObtenerUbicacionesPatrullas()
+        +Task<IActionResult> ObtenerEstadisticasPatrullas()
+        +Task<IActionResult> ObtenerPatrullaPorId(string patrulleroId)
+    }
+    
+    class AuthController <<Controller>> <<Mediator>> {
+        -LoginUseCase _loginUseCase
+        --
+        +AuthController(LoginUseCase loginUseCase)
+        +Task<IActionResult> LoginWithFirebase(LoginFirebaseRequestDto body)
+    }
+    
+    class UserController <<Controller>> <<Mediator>> {
+        -BuscarUsuarioPorDniUseCase _buscarUsuarioPorDniUseCase
+        -VincularDispositivoUseCase _vincularDispositivoUseCase
+        --
+        +UserController(2 dependencies...)
+        +Task<IActionResult> BuscarPorDni(string dni, string? role = null)
+        +Task<IActionResult> VincularDispositivo(VincularDispositivoDto dto)
+    }
+    
+    class DeviceController <<Controller>> <<Mediator>> {
+        -RegistrarDispositivoTTSUseCase _registrarDispositivoTTSUseCase
+        -ListarDispositivosConVinculoUseCase _listarDispositivosConVinculoUseCase
+        --
+        +DeviceController(2 dependencies...)
+        +Task<IActionResult> Registrar(RegistrarDispositivoDto dto)
+        +Task<IActionResult> Listar()
+    }
+    
+    note as MVC_PATTERN_NOTE
+        **🌐 MVC PATTERN**
+        • Model: Entities + DTOs
+        • View: JSON Responses  
+        • Controller: API Controllers
+        
+        Separación clara entre
+        datos, lógica y presentación
+    end note
+    
+    note as MEDIATOR_PATTERN_NOTE
+        **🔄 MEDIATOR PATTERN**
+        Controllers median entre:
+        • HTTP Requests
+        • Use Cases
+        • SignalR Hub
+        • Direct Repositories
+        
+        Centraliza la comunicación
+        entre componentes
+    end note
+    
+    ' === SIGNALR HUB (OBSERVER PATTERN) ===
+    class AlertaHub <<Hub>> <<Observer>> {
+        --
+        +Task JoinGroup(string groupName)
+        +Task LeaveGroup(string groupName)
+        +Task EnviarUbicacionPatrulla(string patrulleroId, double lat, double lon)
+        +Task OnConnectedAsync()
+        +Task OnDisconnectedAsync(Exception? exception)
+    }
+    
+    class "IHubContext<AlertaHub>" <<Observer>> {
+        --
+        +Clients.All.SendAsync() : Task
+        +Clients.Group().SendAsync() : Task
+    }
+    
+    note as OBSERVER_PATTERN_NOTE
+        **👁️ OBSERVER PATTERN**
+        SignalR implementa Observer:
+        • Subject: AlertaHub
+        • Observers: Connected clients
+        • Notifications: Real-time events
+        
+        Notifica automáticamente cambios
+        a múltiples suscriptores
+    end note
+    
+    ' === FILTROS DE AUTORIZACIÓN (DECORATOR PATTERN) ===
+    class FirebaseAuthGuardAttribute <<Filter>> <<Decorator>> {
+        --
+        +Task OnAuthorizationAsync(AuthorizationFilterContext context)
+    }
+    
+    note as DECORATOR_PATTERN_NOTE
+        **🎨 DECORATOR PATTERN**
+        Filtros decoran Controllers
+        agregando funcionalidad de
+        autenticación dinámicamente
+        
+        Agrega responsabilidades
+        sin modificar la clase original
+    end note
+    
+    ' === DTOs DE REQUESTS (COMMAND PATTERN) ===
+    class TomarAlertaRequestDto <<DTO>> <<Command>> {
+        +string alertaId
+        +string patrulleroId
+    }
+    
+    class CambiarEstadoRequestDto <<DTO>> <<Command>> {
+        +string alertaId
+        +string patrulleroId
+        +string nuevoEstado
+    }
+    
+    class LoginFirebaseRequestDto <<DTO>> <<Command>> {
+        +string token
+    }
+    
+    class UbicacionPatrullaDto <<DTO>> <<Command>> {
+        +string PatrulleroId
+        +double Lat
+        +double Lon
+        +DateTime Timestamp
+    }
+    
+    class RegistrarDispositivoDto <<DTO>> <<Command>> {
+        +string DeviceId
+        +string DevEui
+        +string JoinEui
+        +string AppKey
+    }
+    
+    class VincularDispositivoDto <<DTO>> <<Command>> {
+        +string Dni
+        +string DeviceId
+    }
+    
+    note as COMMAND_PATTERN_NOTE
+        **📝 COMMAND PATTERN**
+        DTOs encapsulan comandos:
+        • TomarAlertaRequestDto
+        • CambiarEstadoRequestDto
+        • LoginFirebaseRequestDto
+        • VincularDispositivoDto
+        
+        Encapsula peticiones como objetos
+        permitiendo deshacer/reejecutar
+    end note
+    
+    ' === DTOs DE RESPONSES ===
+    class PatrullaUbicacionDto <<DTO>> {
+        +string PatrulleroId
+        +double Lat
+        +double Lon
+        +DateTime Timestamp
+        +string Estado
+        +double MinutosDesdeUltimaActualizacion
+        --
+        +PatrullaUbicacionDto(patrulleroId, lat, lon, timestamp)
+        +CalcularEstado() : string
+    }
+    
+    class UsuarioFirebaseDto <<DTO>> {
+        +string Uid
+        +string Email
+    }
+    
+    class UsuarioDto <<DTO>> {
+        +string Uid
+        +string Email
+        +string Role
+        +string Dni
+        +string DeviceId
+    }
+    
+    class DispositivoTTSDto <<DTO>> {
+        +string DeviceId
+        +string DevEui
+        +string JoinEui
+        +string AppKey
+        +DateTime CreatedAt
+        +DateTime UpdatedAt
+    }
+    
+    class DispositivoListadoDto <<DTO>> {
+        +string DeviceId
+        +string DevEui
+        +string Vinculado
+    }
+}
+
+' ========== PATRONES ARQUITECTÓNICOS Y SERVICIOS EXTERNOS ==========
+package "🏗️ **ARCHITECTURAL PATTERNS + External Services**" {
+    
+    note as ARCHITECTURAL_PATTERNS
+        **🏗️ PATRONES ARQUITECTÓNICOS**
+        
+        ✅ **LAYERED ARCHITECTURE (Clean Architecture)**
+        • Domain → Application → Infrastructure → WebAPI
+        • Dependencias apuntan hacia adentro
+        
+        ✅ **CLIENT-SERVER PATTERN**
+        • Server: ASP.NET Core API
+        • Clients: Mobile Apps, Web Apps
+        • Protocol: HTTP/HTTPS + WebSockets
+        
+        ✅ **EVENT-DRIVEN PATTERN**  
+        • Webhooks: LoRaWAN events
+        • SignalR: Real-time notifications
+        • Reactive components
+        
+        ✅ **API GATEWAY PATTERN**
+        • Single entry point for all services
+        • CORS, Auth, Rate limiting
+        • Routing and load balancing
+    end note
+    
+    note as MODERN_PATTERNS
+        **💡 PATRONES MODERNOS**
+        
+        ✅ **DEPENDENCY INJECTION**
+        • IoC Container in Program.cs
+        • Constructor injection everywhere
+        • Lifetime management
+        
+        ✅ **UNIT OF WORK (implicit)**
+        • Firestore transactions
+        • Coordinated data operations
+        • Consistency boundaries
+        
+        ✅ **CQRS ELEMENTS**
+        • Separate read/write operations
+        • Different DTOs for commands/queries
+        • Optimized data access
+        
+        ✅ **PUBLISH/SUBSCRIBE**
+        • SignalR real-time notifications
+        • Event-based communication
+        • Loose coupling
+        
+        ✅ **CIRCUIT BREAKER (implicit)**
+        • HTTP timeout configuration
+        • Exception handling
+        • Graceful degradation
+        
+        ✅ **API GATEWAY**
+        • Single API entry point
+        • Cross-cutting concerns
+        • Service aggregation
+    end note
+    
+    class "LoRaWAN Webhook" <<External>> {
+        +JsonElement data
+        +POST /api/alerta/lorawan-webhook
+    }
+    
+    class "The Things Stack API" <<External>> {
+        +POST /applications/{app-id}/devices
+        +GET /applications/{app-id}/devices
+        +Authorization Bearer {api-key}
+    }
+}
+
+' ========== RELACIONES - DEPENDENCY INJECTION (IoC PATTERN) ==========
+' === USE CASES → INTERFACES ===
+RegistrarAlertaUseCase ..> IAlertaRepository : **depends on**
+ListarAlertasUseCase ..> IAlertaRepository : **depends on**
+ActualizarUbicacionPatrullaUseCase ..> IPatrulleroRepository : **depends on**
+ListarUbicacionesPatrullasUseCase ..> IPatrulleroRepository : **depends on**
+LoginUseCase ..> IFirebaseAuthService : **depends on**
+LoginUseCase ..> IUserRepositoryFirestore : **depends on**
+BuscarUsuarioPorDniUseCase ..> IUserRepositoryFirestore : **depends on**
+VincularDispositivoUseCase ..> IUserRepositoryFirestore : **depends on**
+RegistrarDispositivoTTSUseCase ..> ITTSDeviceService : **depends on**
+RegistrarDispositivoTTSUseCase ..> IDispositivoRepository : **depends on**
+ListarDispositivosConVinculoUseCase ..> IDispositivoRepository : **depends on**
+ListarDispositivosConVinculoUseCase ..> IUserRepositoryFirestore : **depends on**
+ListarDispositivosTTSUseCase ..> ITTSDeviceService : **depends on**
+
+' ========== RELACIONES - IMPLEMENTACIONES (REPOSITORY + ADAPTER PATTERN) ==========
+AlertaRepositoryFirestore ..|> IAlertaRepository : **implements**
+PatrullaRepositoryFirestore ..|> IPatrulleroRepository : **implements**
+UserRepositoryFirestore ..|> IUserRepositoryFirestore : **implements**
+DispositivoRepositoryFirestore ..|> IDispositivoRepository : **implements**
+FirebaseAuthService ..|> IFirebaseAuthService : **implements**
+TTSDeviceService ..|> ITTSDeviceService : **implements**
+
+' ========== RELACIONES - CONTROLADORES CON CASOS DE USO (MEDIATOR PATTERN) ==========
+AlertaController ..> RegistrarAlertaUseCase : **uses**
+AlertaController ..> ListarAlertasUseCase : **uses**
+AlertaController ..> IAlertaRepository : **uses directly**
+AlertaController ..> IUserRepositoryFirestore : **uses directly**
+PatrullaController ..> ActualizarUbicacionPatrullaUseCase : **uses**
+PatrullaController ..> ListarUbicacionesPatrullasUseCase : **uses**
+AuthController ..> LoginUseCase : **uses**
+UserController ..> BuscarUsuarioPorDniUseCase : **uses**
+UserController ..> VincularDispositivoUseCase : **uses**
+DeviceController ..> RegistrarDispositivoTTSUseCase : **uses**
+DeviceController ..> ListarDispositivosConVinculoUseCase : **uses**
+
+' ========== RELACIONES - REPOSITORIOS CON BD EXTERNA (ADAPTER + SINGLETON) ==========
+AlertaRepositoryFirestore ..> FirestoreDb : **uses**
+PatrullaRepositoryFirestore ..> FirestoreDb : **uses**
+UserRepositoryFirestore ..> FirestoreDb : **uses**
+DispositivoRepositoryFirestore ..> FirestoreDb : **uses**
+FirebaseAuthService ..> FirebaseApp : **uses**
+TTSDeviceService ..> HttpClientFactory : **uses**
+
+' ========== RELACIONES - ENTIDADES GESTIONADAS POR REPOSITORIOS ==========
+IAlertaRepository ..> Alerta : **manages**
+IPatrulleroRepository ..> Patrulla : **manages**
+IUserRepositoryFirestore ..> Usuario : **manages**
+IDispositivoRepository ..> DispositivoTTSDto : **manages**
+
+' ========== RELACIONES - DTOS EN CONTROLADORES (COMMAND PATTERN) ==========
+AlertaController ..> TomarAlertaRequestDto : **receives**
+AlertaController ..> CambiarEstadoRequestDto : **receives**
+PatrullaController ..> UbicacionPatrullaDto : **receives**
+PatrullaController ..> PatrullaUbicacionDto : **returns**
+AuthController ..> LoginFirebaseRequestDto : **receives**
+AuthController ..> UsuarioFirebaseDto : **returns**
+UserController ..> VincularDispositivoDto : **receives**
+UserController ..> UsuarioDto : **returns**
+DeviceController ..> RegistrarDispositivoDto : **receives**
+DeviceController ..> DispositivoListadoDto : **returns**
+
+' ========== RELACIONES - SIGNALR HUB (OBSERVER PATTERN) ==========
+AlertaController ..> AlertaHub : **notifies via IHubContext**
+AlertaController ..> "IHubContext<AlertaHub>" : **uses**
+
+' ========== RELACIONES - FILTROS DE AUTORIZACIÓN (DECORATOR PATTERN) ==========
+AlertaController ..> FirebaseAuthGuardAttribute : **protected by**
+PatrullaController ..> FirebaseAuthGuardAttribute : **protected by**
+UserController ..> FirebaseAuthGuardAttribute : **protected by**
+DeviceController ..> FirebaseAuthGuardAttribute : **protected by**
+
+' ========== RELACIONES - SERVICIOS EXTERNOS (EVENT-DRIVEN + API INTEGRATION) ==========
+"LoRaWAN Webhook" ..> AlertaController : **sends POST to**
+"The Things Stack API" ..> TTSDeviceService : **integrates with**
+
+' ========== RESUMEN DE PATRONES ==========
+note as PATTERNS_SUMMARY
+    **🎯 RESUMEN COMPLETO DE PATRONES IMPLEMENTADOS**
+    
+    **🧩 CREACIONALES (2):**
+    ✅ Singleton (FirestoreDb, FirebaseApp)
+    ✅ Factory Method (DI Container, HttpClientFactory)
+    
+    **🧱 ESTRUCTURALES (4):**
+    ✅ Adapter (Repositories, Services)
+    ✅ Repository (Data access abstraction)
+    ✅ Facade (Use Cases simplify complexity)
+    ✅ Decorator (Auth filters)
+    
+    **⚙️ COMPORTAMENTALES (5):**
+    ✅ Observer (SignalR Hub)
+    ✅ Command (Request DTOs)
+    ✅ Strategy (Interface implementations)
+    ✅ Mediator (Controllers)
+    ✅ Template Method (Controller structure)
+    
+    **🏗️ ARQUITECTÓNICOS (4):**
+    ✅ Layered Architecture (Clean Architecture)
+    ✅ MVC (Model-View-Controller)
+    ✅ Client-Server (API + clients)
+    ✅ Event-Driven (Webhooks + SignalR)
+    
+    **💡 MODERNOS (6):**
+    ✅ Dependency Injection (IoC)
+    ✅ Unit of Work (Transactions)
+    ✅ CQRS Elements (Read/Write separation)
+    ✅ API Gateway (Single entry point)
+    ✅ Publish/Subscribe (SignalR)
+    ✅ Circuit Breaker (Error handling)
+    
+    **🏆 TOTAL: 21 PATRONES DE DISEÑO** 
+    **ARQUITECTURA PROFESIONAL EMPRESARIAL**
+end note
+
+note as CLEAN_ARCHITECTURE_NOTE
+    **🏛️ CLEAN ARCHITECTURE IMPLEMENTADA**
+    
+    ✅ **4 Capas bien definidas**
+    ✅ **Separación de Responsabilidades**
+    ✅ **Inversión de Dependencias**
+    ✅ **Altamente Testeable**
+    ✅ **Fácil Mantenimiento**
+    ✅ **Independiente de Framework**
+end note
+
+note as DEPENDENCY_INJECTION_DETAILS
+    **💉 DEPENDENCY INJECTION CONFIGURACIÓN**
+    
+    Configurado en Program.cs:
+    
+    **Repositories:**
+    • AddScoped<IAlertaRepository, AlertaRepositoryFirestore>()
+    • AddScoped<IPatrulleroRepository, PatrullaRepositoryFirestore>()
+    • AddScoped<IUserRepositoryFirestore, UserRepositoryFirestore>()
+    • AddScoped<IDispositivoRepository, DispositivoRepositoryFirestore>()
+    
+    **Use Cases:**
+    • AddScoped<RegistrarAlertaUseCase>()
+    • AddScoped<ListarAlertasUseCase>()
+    • AddScoped<LoginUseCase>()
+    • AddScoped<BuscarUsuarioPorDniUseCase>()
+    
+    **Services:**
+    • AddScoped<IFirebaseAuthService, FirebaseAuthService>()
+    • AddScoped<ITTSDeviceService, TTSDeviceService>()
+    • AddScoped<ValidadorDatosService>()
+    
+    **External:**
+    • AddSingleton<FirestoreDb>()
+    • AddHttpClient()
+    • AddSignalR()
+end note
+
+@enduml
