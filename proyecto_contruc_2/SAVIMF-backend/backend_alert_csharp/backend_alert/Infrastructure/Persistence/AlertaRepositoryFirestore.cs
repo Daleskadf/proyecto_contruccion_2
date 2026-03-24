@@ -392,41 +392,18 @@ namespace Infrastructure.Persistence
                 return new List<Alerta>(); // Retornar lista vacía en caso de error
             }
         }
-
-        // ⏰ ARCHIVAR ALERTAS VENCIDAS (5+ horas sin atender) - DESACTIVADO POR ÍNDICES
-        public async Task ArchivarAlertasVencidas()
+        
+        public Task ArchivarAlertasVencidas()
         {
             try
             {
-                // 🚫 TEMPORALMENTE DESACTIVADO PARA EVITAR ERROR DE ÍNDICES
-                Console.WriteLine("⚠️ Auto-archivado temporalmente desactivado (requiere índices Firestore)");
-                return;
-
-                /*
-                var tiempoLimite = DateTime.UtcNow.AddHours(-5);
-                
-                var query = _firestoreDb.Collection("alertas")
-                    .WhereEqualTo("estado", "disponible")
-                    .WhereLessThan("fechaCreacion", tiempoLimite);
-
-                var snapshot = await query.GetSnapshotAsync();
-
-                Console.WriteLine($"🗂️ Encontradas {snapshot.Count} alertas para archivar (más de 5 horas)");
-
-                foreach (var doc in snapshot.Documents)
-                {
-                    await doc.Reference.UpdateAsync(new Dictionary<string, object>
-                    {
-                        { "estado", "no-atendida" },
-                        { "fechaArchivada", DateTime.UtcNow }
-                    });
-                }
-                */
+                Console.WriteLine("Auto-archivado temporalmente desactivado (requiere índices Firestore)");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Error archivando alertas vencidas: {ex.Message}");
-                // No lanzar excepción para no interrumpir el flujo principal
+                Console.WriteLine($"Error archivando alertas vencidas: {ex.Message}");
+                return Task.CompletedTask;
             }
         }
 
