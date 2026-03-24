@@ -14,11 +14,11 @@ using Microsoft.AspNetCore.SignalR;
 public class AlertaController : ControllerBase
 {
     private readonly RegistrarAlertaUseCase _registrarAlertaUseCase;
-    private readonly IUserRepositoryFirestore _userRepository; // Inyección del repo
+    private readonly IUserRepositoryFirestore _userRepository; 
     private readonly ListarAlertasUseCase _listarAlertasUseCase;
     private readonly IHubContext<AlertaHub> _hubContext;
     private readonly IAlertaRepository _alertaRepository;
-    private readonly IFCMService _fcmService; // 🆕 Servicio FCM
+    private readonly IFCMService _fcmService; 
 
     public AlertaController(
     RegistrarAlertaUseCase registrarAlertaUseCase,
@@ -26,27 +26,83 @@ public class AlertaController : ControllerBase
     IUserRepositoryFirestore userRepository,
     IHubContext<AlertaHub> hubContext,
     IAlertaRepository alertaRepository,
-    IFCMService fcmService) // 🆕 Inyección FCM
+    IFCMService fcmService) 
     {
         _registrarAlertaUseCase = registrarAlertaUseCase;
         _listarAlertasUseCase = listarAlertasUseCase;
         _userRepository = userRepository;
         _hubContext = hubContext;
         _alertaRepository = alertaRepository;
-        _fcmService = fcmService; // 🆕
+        _fcmService = fcmService; 
     }
 
     [HttpPost("lorawan-webhook")]
     public async Task<IActionResult> RegistrarLorawanWebhook([FromBody] JsonElement data)
     {
-        Console.WriteLine(data.ToString()); // Log para depuración
+        try
+        {
+            Console.WriteLine(data.ToString()); // Log para depuración
 
-        string? devEUI = null;
-        string? deviceId = null;
-        double? lat = null;
-        double? lon = null;
-        double? bateria = null;
-        DateTime timestamp = DateTime.UtcNow;
+            // Extraer datos del webhook
+            var datosExtraidos = ExtraerDatosLorawanWebhook(data);
+
+            if (string.IsNullOrEmpty(datosExtraidos.DevEUI) || 
+                datosExtraidos.Lat == null || 
+                datosExtraidos.Lon == null || 
+                datosExtraidos.Bateria == null)
+            {
+                return BadRequest(new { mensaje = "Datos incompletos o inválidos" });
+            }
+
+            // Buscar víctima por deviceId
+            var datosVictima = await ObtenerDatosVictima(datosExtraidos.DeviceId);
+
+            // Crear alerta
+            var alerta = new Alerta(
+                datosExtraidos.DevEUI,
+                datosExtraidos.Lat.Value,
+                datosExtraidos.Lon.Value,
+                datosExtraidos.Bateria.Value,
+                datosExtraidos.Timestamp,
+                datosExtraidos.DeviceId ?? string.Empty,
+                $"{datosVictima.Nombre} {datosVictima.Apellido}"
+            );
+
+            await _registrarAlertaUseCase.EjecutarAsync(alerta);
+
+            // Enviar notificaciones
+            await EnviarNotificacionesAlerta(datosExtraidos, datosVictima);
+
+            // Respuesta HTTP
+            return Ok(new
+            {
+                estado = "Despachada",
+                nombre = datosVictima.Nombre,
+                apellido = datosVictima.Apellido,
+                dni = datosVictima.Dni,
+                lat = datosExtraidos.Lat,
+                lon = datosExtraidos.Lon,
+                bateria = datosExtraidos.Bateria,
+                timestamp = datosExtraidos.Timestamp,
+                device_id = datosExtraidos.DeviceId
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error procesando webhook LoRaWAN: {ex.Message}");
+            return StatusCode(500, new { mensaje = "Error interno al procesar webhook" });
+        }
+    }
+
+    /// <summary>
+    /// Extrae datos del webhook LoRaWAN (DevEUI, GPS, batería, timestamp)
+    /// </summary>
+    private DatosLorawanDto ExtraerDatosLorawanWebhook(JsonElement data)
+    {
+        var datos = new DatosLorawanDto
+        {
+            Timestamp = DateTime.UtcNow
+        };
 
         try
         {
@@ -54,10 +110,10 @@ public class AlertaController : ControllerBase
             if (data.TryGetProperty("end_device_ids", out JsonElement endDeviceIds))
             {
                 if (endDeviceIds.TryGetProperty("dev_eui", out JsonElement devEuiProp))
-                    devEUI = devEuiProp.GetString();
+                    datos.DevEUI = devEuiProp.GetString();
 
                 if (endDeviceIds.TryGetProperty("device_id", out JsonElement deviceIdProp))
-                    deviceId = deviceIdProp.GetString();
+                    datos.DeviceId = deviceIdProp.GetString();
             }
 
             // Uplink_message y payload
@@ -68,49 +124,47 @@ public class AlertaController : ControllerBase
                 var frmPayloadBase64 = frmPayloadProp.GetString();
                 if (!string.IsNullOrEmpty(frmPayloadBase64))
                 {
-                    byte[] decodedBytes;
                     try
                     {
-                        decodedBytes = Convert.FromBase64String(frmPayloadBase64);
+                        byte[] decodedBytes = Convert.FromBase64String(frmPayloadBase64);
+                        string payloadDecoded = System.Text.Encoding.UTF8.GetString(decodedBytes);
+
+                        using var doc = JsonDocument.Parse(payloadDecoded);
+                        var payloadJson = doc.RootElement;
+
+                        // GPS
+                        if (payloadJson.TryGetProperty("GPS", out JsonElement gpsProp))
+                        {
+                            var gpsString = gpsProp.GetString();
+                            if (!string.IsNullOrEmpty(gpsString))
+                            {
+                                var coords = gpsString.Split(',');
+                                if (coords.Length == 2 &&
+                                    double.TryParse(coords[0], out var latVal) &&
+                                    double.TryParse(coords[1], out var lonVal))
+                                {
+                                    datos.Lat = latVal;
+                                    datos.Lon = lonVal;
+                                }
+                            }
+                        }
+
+                        // Batería
+                        if (payloadJson.TryGetProperty("Battery", out JsonElement batteryProp) &&
+                            batteryProp.TryGetDouble(out var batteryVal))
+                        {
+                            datos.Bateria = batteryVal;
+                        }
                     }
                     catch (FormatException)
                     {
-                        return BadRequest(new { mensaje = "Formato de frm_payload inválido (no es Base64 válido)" });
-                    }
-
-                    string payloadDecoded = System.Text.Encoding.UTF8.GetString(decodedBytes);
-
-                    using var doc = JsonDocument.Parse(payloadDecoded);
-                    var payloadJson = doc.RootElement;
-
-                    // GPS
-                    if (payloadJson.TryGetProperty("GPS", out JsonElement gpsProp))
-                    {
-                        var gpsString = gpsProp.GetString();
-                        if (!string.IsNullOrEmpty(gpsString))
-                        {
-                            var coords = gpsString.Split(',');
-                            if (coords.Length == 2 &&
-                                double.TryParse(coords[0], out var latVal) &&
-                                double.TryParse(coords[1], out var lonVal))
-                            {
-                                lat = latVal;
-                                lon = lonVal;
-                            }
-                        }
-                    }
-
-                    // Batería
-                    if (payloadJson.TryGetProperty("Battery", out JsonElement batteryProp) &&
-                        batteryProp.TryGetDouble(out var batteryVal))
-                    {
-                        bateria = batteryVal;
+                        Console.WriteLine("Formato de frm_payload inválido (no es Base64 válido)");
                     }
                 }
             }
 
             // Fallback: ubicación por locations.user
-            if ((lat == null || lon == null) &&
+            if ((datos.Lat == null || datos.Lon == null) &&
                 data.TryGetProperty("uplink_message", out JsonElement uplinkMessage2) &&
                 uplinkMessage2.TryGetProperty("locations", out JsonElement locations) &&
                 locations.TryGetProperty("user", out JsonElement user))
@@ -120,8 +174,8 @@ public class AlertaController : ControllerBase
                     latProp.TryGetDouble(out var latVal) &&
                     lonProp.TryGetDouble(out var lonVal))
                 {
-                    lat = latVal;
-                    lon = lonVal;
+                    datos.Lat = latVal;
+                    datos.Lon = lonVal;
                 }
             }
 
@@ -130,64 +184,79 @@ public class AlertaController : ControllerBase
                 receivedAtProp.ValueKind == JsonValueKind.String &&
                 DateTime.TryParse(receivedAtProp.GetString(), out var ts))
             {
-                timestamp = ts;
+                datos.Timestamp = ts;
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error parseando Lorawan: {ex.Message}");
+            Console.WriteLine($"⚠️ Error parseando datos LoRaWAN: {ex.Message}");
         }
 
-        // Validación básica
-        if (string.IsNullOrEmpty(devEUI) || lat == null || lon == null || bateria == null)
-            return BadRequest(new { mensaje = "Datos incompletos o inválidos" });
+        return datos;
+    }
 
-        // Buscar víctima por deviceId
-        UsuarioDto? victima = null;
-        string nombreVictima = "Sin asignar";
-        string apellidoVictima = "";
-        string dniVictima = "";
-        if (!string.IsNullOrEmpty(deviceId))
+    /// <summary>
+    /// Obtiene datos de la víctima desde el repositorio de usuarios
+    /// </summary>
+    private async Task<DatosVictima> ObtenerDatosVictima(string? deviceId)
+    {
+        var datosVictima = new DatosVictima
         {
-            victima = await _userRepository.BuscarPorDeviceIdAsync(deviceId);
-            if (victima != null)
-            {
-                nombreVictima = victima.Nombre;
-                apellidoVictima = victima.Apellido;
-                dniVictima = victima.Dni;
-            }
-        }
+            Nombre = "Sin asignar",
+            Apellido = "",
+            Dni = ""
+        };
 
-        // Guarda o actualiza la alerta en Firestore
-        var alerta = new Alerta(
-            devEUI,
-            lat.Value,
-            lon.Value,
-            bateria.Value,
-            timestamp,
-            deviceId ?? string.Empty, // Usar string.Empty si deviceId es null
-            $"{nombreVictima} {apellidoVictima}"
-        );
-        await _registrarAlertaUseCase.EjecutarAsync(alerta);
+        if (string.IsNullOrEmpty(deviceId))
+            return datosVictima;
 
-        // --- ENVÍA LA ALERTA EN TIEMPO REAL AL FRONTEND WEB (SignalR) ---
-        await _hubContext.Clients.All.SendAsync("RecibirAlerta", new
-        {
-            estado = "Despachada",
-            nombre = nombreVictima,
-            apellido = apellidoVictima,
-            dni = dniVictima,
-            lat = lat,
-            lon = lon,
-            bateria = bateria,
-            timestamp = timestamp,
-            device_id = deviceId,
-        });
-
-        // --- 🆕 ENVÍA NOTIFICACIÓN PUSH FCM A PATRULLEROS ---
         try
         {
-            // Obtener tokens FCM de patrulleros activos
+            var victima = await _userRepository.BuscarPorDeviceIdAsync(deviceId);
+            if (victima != null)
+            {
+                datosVictima.Nombre = victima.Nombre;
+                datosVictima.Apellido = victima.Apellido;
+                datosVictima.Dni = victima.Dni;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error obtener datos de víctima: {ex.Message}");
+        }
+
+        return datosVictima;
+    }
+
+    /// <summary>
+    /// Envía notificaciones SignalR y FCM
+    /// </summary>
+    private async Task EnviarNotificacionesAlerta(DatosLorawanDto datosAlerta, DatosVictima datosVictima)
+    {
+        // Enviar por SignalR
+        try
+        {
+            await _hubContext.Clients.All.SendAsync("RecibirAlerta", new
+            {
+                estado = "Despachada",
+                nombre = datosVictima.Nombre,
+                apellido = datosVictima.Apellido,
+                dni = datosVictima.Dni,
+                lat = datosAlerta.Lat,
+                lon = datosAlerta.Lon,
+                bateria = datosAlerta.Bateria,
+                timestamp = datosAlerta.Timestamp,
+                device_id = datosAlerta.DeviceId,
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error enviando notificación SignalR: {ex.Message}");
+        }
+
+        // Enviar por FCM
+        try
+        {
             var tokensFcm = await _userRepository.ObtenerTokensFcmPorRoleAsync("patrullero", soloActivos: true);
 
             if (tokensFcm.Any())
@@ -195,19 +264,19 @@ public class AlertaController : ControllerBase
                 var alertaData = new Dictionary<string, string>
                 {
                     ["type"] = "emergency_alert",
-                    ["lat"] = lat?.ToString() ?? "0",
-                    ["lon"] = lon?.ToString() ?? "0",
-                    ["nombre"] = nombreVictima,
-                    ["apellido"] = apellidoVictima,
-                    ["dni"] = dniVictima,
-                    ["device_id"] = deviceId ?? "",
-                    ["timestamp"] = timestamp.ToString("O"),
-                    ["bateria"] = bateria?.ToString() ?? "0"
+                    ["lat"] = datosAlerta.Lat?.ToString() ?? "0",
+                    ["lon"] = datosAlerta.Lon?.ToString() ?? "0",
+                    ["nombre"] = datosVictima.Nombre,
+                    ["apellido"] = datosVictima.Apellido,
+                    ["dni"] = datosVictima.Dni,
+                    ["device_id"] = datosAlerta.DeviceId ?? "",
+                    ["timestamp"] = datosAlerta.Timestamp.ToString("O"),
+                    ["bateria"] = datosAlerta.Bateria?.ToString() ?? "0"
                 };
 
-                string tituloNotificacion = "🚨 Nueva Alerta de Emergencia";
-                string cuerpoNotificacion = !string.IsNullOrEmpty(nombreVictima) && nombreVictima != "Sin asignar"
-                    ? $"Alerta de {nombreVictima} {apellidoVictima}"
+                string tituloNotificacion = "Nueva Alerta de Emergencia";
+                string cuerpoNotificacion = !string.IsNullOrEmpty(datosVictima.Nombre) && datosVictima.Nombre != "Sin asignar"
+                    ? $"Alerta de {datosVictima.Nombre} {datosVictima.Apellido}"
                     : "Nueva alerta de emergencia detectada";
 
                 int notificacionesEnviadas = await _fcmService.EnviarNotificacionMultipleAsync(
@@ -217,63 +286,80 @@ public class AlertaController : ControllerBase
                     alertaData
                 );
 
-                Console.WriteLine($"📱 Notificaciones FCM enviadas: {notificacionesEnviadas}/{tokensFcm.Count}");
+                Console.WriteLine($"Notificaciones FCM enviadas: {notificacionesEnviadas}/{tokensFcm.Count}");
             }
             else
             {
-                Console.WriteLine("⚠️ No se encontraron tokens FCM activos para patrulleros");
+                Console.WriteLine("No se encontraron tokens FCM activos para patrulleros");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"❌ Error enviando notificaciones FCM: {ex.Message}");
+            Console.WriteLine($"Error enviando notificaciones FCM: {ex.Message}");
             // No interrumpir el flujo si FCM falla
         }
+    }
 
-        // Respuesta HTTP normal
-        return Ok(new
-        {
-            estado = "Despachada",
-            nombre = nombreVictima,
-            apellido = apellidoVictima,
-            dni = dniVictima,
-            lat = lat,
-            lon = lon,
-            bateria = bateria,
-            timestamp = timestamp,
-            device_id = deviceId
-        });
+    /// <summary>
+    /// DTO para datos extraídos del webhook LoRaWAN
+    /// </summary>
+    private class DatosLorawanDto
+    {
+        public string? DevEUI { get; set; }
+        public string? DeviceId { get; set; }
+        public double? Lat { get; set; }
+        public double? Lon { get; set; }
+        public double? Bateria { get; set; }
+        public DateTime Timestamp { get; set; }
+    }
+
+    /// <summary>
+    /// DTO para datos de la víctima
+    /// </summary>
+    private class DatosVictima
+    {
+        public string Nombre { get; set; } = "";
+        public string Apellido { get; set; } = "";
+        public string Dni { get; set; } = "";
     }
 
     [FirebaseAuthGuardAttribute]
     [HttpGet("listar")]
     public async Task<IActionResult> ListarAlertas()
     {
-        var alertas = await _listarAlertasUseCase.EjecutarAsync();
-        var result = alertas.Select(a => new
+        try
         {
-            id = a.Id,  //¡IMPORTANTE! Incluir el ID del documento
-            estado = a.Estado ?? "disponible",  // Usar el estado real de la BD
-            nombre = string.IsNullOrWhiteSpace(a.NombreVictima) ? "Sin asignar" : a.NombreVictima,
-            lat = a.Lat,
-            lon = a.Lon,
-            bateria = a.Bateria,
-            timestamp = a.Timestamp,
-            device_id = a.DeviceId,
-            // 🔥 NUEVOS CAMPOS SISTEMA DE PRIORIDADES
-            cantidadActivaciones = a.CantidadActivaciones,
-            ultimaActivacion = a.UltimaActivacion,
-            nivelUrgencia = a.NivelUrgencia,
-            esRecurrente = a.EsRecurrente,
-            devEUI = a.DevEUI,
-            patrulleroAsignado = a.PatrulleroAsignado ?? "",
-            fechaTomada = a.FechaTomada,
-            fechaLlegada = a.FechaLlegada,
-            fechaAtendida = a.FechaAtendida,
-            fechaResuelto = a.FechaResuelto
-        }).ToList();
+            var alertas = await _listarAlertasUseCase.EjecutarAsync();
+            var result = alertas.Select(a => new
+            {
+                id = a.Id,  //¡IMPORTANTE! Incluir el ID del documento
+                estado = a.Estado ?? "disponible",  // Usar el estado real de la BD
+                nombre = string.IsNullOrWhiteSpace(a.NombreVictima) ? "Sin asignar" : a.NombreVictima,
+                lat = a.Lat,
+                lon = a.Lon,
+                bateria = a.Bateria,
+                timestamp = a.Timestamp,
+                device_id = a.DeviceId,
+                // NUEVOS CAMPOS SISTEMA DE PRIORIDADES
+                cantidadActivaciones = a.CantidadActivaciones,
+                ultimaActivacion = a.UltimaActivacion,
+                nivelUrgencia = a.NivelUrgencia,
+                esRecurrente = a.EsRecurrente,
+                devEUI = a.DevEUI,
+                patrulleroAsignado = a.PatrulleroAsignado ?? "",
+                fechaTomada = a.FechaTomada,
+                fechaLlegada = a.FechaLlegada,
+                fechaAtendida = a.FechaAtendida,
+                fechaResuelto = a.FechaResuelto
+            }).ToList();
 
-        return Ok(result);
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al listar alertas: {ex.Message}");
+            return StatusCode(500, new { mensaje = "Error interno al listar alertas" });
+        }
     }
 
     // ==================================================
@@ -283,11 +369,18 @@ public class AlertaController : ControllerBase
     // ==================================================
     [FirebaseAuthGuardAttribute]
     [HttpGet("rango")]
-    public async Task<IActionResult> ObtenerAlertasPorRango([FromQuery] DateTime fechaInicio, [FromQuery] DateTime fechaFin)
+    public async Task<IActionResult> ObtenerAlertasPorRango([FromQuery] DateTime? fechaInicio, [FromQuery] DateTime? fechaFin)
     {
         try
         {
-            var alertas = await _alertaRepository.ObtenerAlertasPorRangoFechas(fechaInicio, fechaFin);
+            // Validar parámetros
+            if (!fechaInicio.HasValue || !fechaFin.HasValue)
+                return BadRequest(new { mensaje = "fechaInicio y fechaFin son requeridos" });
+
+            if (fechaInicio > fechaFin)
+                return BadRequest(new { mensaje = "fechaInicio debe ser menor a fechaFin" });
+
+            var alertas = await _alertaRepository.ObtenerAlertasPorRangoFechas(fechaInicio.Value, fechaFin.Value);
 
             var result = alertas.Select(a => new
             {
@@ -316,7 +409,7 @@ public class AlertaController : ControllerBase
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"❌ Error obteniendo alertas por rango: {ex.Message}");
+            Console.WriteLine($"Error obteniendo alertas por rango: {ex.Message}");
             return StatusCode(500, new { mensaje = "Error al obtener alertas por rango" });
         }
     }
@@ -347,7 +440,7 @@ public class AlertaController : ControllerBase
         }
         catch (Exception ex) when (ex.Message.Contains("No document to update"))
         {
-            Console.WriteLine($"❌ Alerta no encontrada: {body?.alertaId}");
+            Console.WriteLine($"Alerta no encontrada: {body?.alertaId}");
             return NotFound(new
             {
                 mensaje = $"La alerta con ID '{body?.alertaId ?? "N/A"}' no existe",
@@ -405,7 +498,7 @@ public class AlertaController : ControllerBase
         }
         catch (Exception ex) when (ex.Message.Contains("No document to update"))
         {
-            Console.WriteLine($"❌ Alerta no encontrada: {body?.alertaId}");
+            Console.WriteLine($"Alerta no encontrada: {body?.alertaId}");
             return NotFound(new
             {
                 mensaje = $"La alerta con ID '{body?.alertaId}' no existe",
@@ -422,9 +515,23 @@ public class AlertaController : ControllerBase
 
     [FirebaseAuthGuardAttribute]
     [HttpGet("cantidad")]
-    public IActionResult CantidadAlertas()
+    public async Task<IActionResult> CantidadAlertas()
     {
-        return Ok(new { mensaje = "OK" });
+        try
+        {
+            var alertas = await _alertaRepository.ListarAlertasActivasAsync();
+            int cantidad = alertas.Count;
+            
+            return Ok(new { 
+                cantidad = cantidad,
+                mensaje = "OK"
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error al obtener cantidad de alertas: {ex.Message}");
+            return StatusCode(500, new { mensaje = "Error al obtener cantidad de alertas" });
+        }
     }
 
     // 📋 ENDPOINT PARA OBTENER SOLO ALERTAS ACTIVAS (optimizado para frontend)
@@ -434,7 +541,7 @@ public class AlertaController : ControllerBase
     {
         try
         {
-            await _alertaRepository.ArchivarAlertasVencidas(); // 🔥 Auto-archivar antes de listar
+            await _alertaRepository.ArchivarAlertasVencidas(); // Auto-archivar antes de listar
 
             var alertas = await _alertaRepository.ListarAlertasActivasAsync();
             var result = alertas.Select(a => new
@@ -450,18 +557,18 @@ public class AlertaController : ControllerBase
                 fechaCreacion = a.FechaCreacion,
                 patrulleroAsignado = a.PatrulleroAsignado ?? "",
 
-                // 🔥 NUEVOS CAMPOS PARA FRONTEND
+                // NUEVOS CAMPOS PARA FRONTEND
                 cantidadActivaciones = a.CantidadActivaciones,
                 ultimaActivacion = a.UltimaActivacion,
                 nivelUrgencia = a.NivelUrgencia,
                 esRecurrente = a.EsRecurrente
-            });
+            }).ToList();
 
             return Ok(result);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"❌ Error al obtener alertas activas: {ex.Message}");
+            Console.WriteLine($"Error al obtener alertas activas: {ex.Message}");
             return StatusCode(500, new { mensaje = "Error interno al obtener alertas activas" });
         }
     }
